@@ -1,0 +1,39 @@
+name: Cut Hotfix
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_version:
+        description: "Üzerinden cut alınacak release edilmiş versiyon (v'siz — örn. 22.0.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (sadece validasyon, push yok)"
+        required: false
+        type: boolean
+        default: false
+
+# Aynı base için paralel çift tetiklemeyi serileştirir.
+concurrency:
+  group: cut-hotfix-${{ inputs.base_version }}
+  cancel-in-progress: false
+
+jobs:
+  cut-hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gerçek ortamda GitHub App token'ı önerilir (bkz. cut-release.yml).
+      # Test ortamında fine-grained PAT (Contents: R/W) RELEASE_BOT_TOKEN secret'ı olarak kullanılıyor.
+
+      - name: Validate and cut hotfix
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          OWNER: yusufbingol
+          # Gerçek ortamda: assistbox-ios assistbox-android assistbox-mobile-web-content
+          REPOS: git_deneme git_deneme_2 git_deneme_3
+          MODE: hotfix
+          BASE_VERSION: ${{ inputs.base_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: ./scripts/cut.sh

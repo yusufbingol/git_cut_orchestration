@@ -1,0 +1,46 @@
+name: Cut Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Yeni versiyon (X.0.0 formatında, v'siz — örn. 23.0.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (sadece validasyon, push yok)"
+        required: false
+        type: boolean
+        default: false
+
+# Aynı versiyon için paralel çift tetiklemeyi serileştirir.
+concurrency:
+  group: cut-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gerçek ortamda GitHub App token'ı önerilir:
+      # - uses: actions/create-github-app-token@v1
+      #   id: app-token
+      #   with:
+      #     app-id: ${{ secrets.APP_ID }}
+      #     private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      #     owner: Assistbox
+      #     repositories: assistbox-ios,assistbox-android,assistbox-mobile-web-content
+      # Test ortamında fine-grained PAT (Contents: R/W) RELEASE_BOT_TOKEN secret'ı olarak kullanılıyor.
+
+      - name: Validate and cut
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          OWNER: yusufbingol
+          # Gerçek ortamda: assistbox-ios assistbox-android assistbox-mobile-web-content
+          REPOS: git_deneme git_deneme_2 git_deneme_3
+          MODE: release
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: ./scripts/cut.sh
