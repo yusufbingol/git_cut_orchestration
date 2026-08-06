@@ -66,8 +66,9 @@ fail_with_errors() { # başlık
 
 if [[ "$MODE" == "release" ]]; then
   : "${VERSION:?VERSION gerekli (release modu)}"
-  if ! [[ "$VERSION" =~ ^([0-9]+)\.0\.0$ ]]; then
-    echo "::error::Versiyon 'X.0.0' formatında olmalı (girilen: $VERSION). Minor/patch cut bu workflow'un kapsamında değil."
+  # Başında sıfır kabul edilmez (023 → octal/isim kirliliği riski).
+  if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.0\.0$ ]]; then
+    echo "::error::Versiyon 'X.0.0' formatında olmalı, başında sıfır olmadan (girilen: $VERSION). Minor/patch cut bu workflow'un kapsamında değil."
     exit 1
   fi
   NEW_MAJOR="${BASH_REMATCH[1]}"
@@ -76,8 +77,9 @@ if [[ "$MODE" == "release" ]]; then
   TITLE="Cut Release v$NEW_VERSION"
 elif [[ "$MODE" == "hotfix" ]]; then
   : "${BASE_VERSION:?BASE_VERSION gerekli (hotfix modu)}"
-  if ! [[ "$BASE_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    echo "::error::Base versiyon 'X.Y.Z' formatında olmalı (girilen: $BASE_VERSION)"
+  # Başında sıfır kabul edilmez (023 → octal/isim kirliliği riski).
+  if ! [[ "$BASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "::error::Base versiyon 'X.Y.Z' formatında olmalı, başında sıfır olmadan (girilen: $BASE_VERSION)"
     exit 1
   fi
   MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; PATCH="${BASH_REMATCH[3]}"
@@ -111,13 +113,18 @@ for i in "${!REPO_LIST[@]}"; do
       continue
     fi
 
-    # Major sıçrama guard'ı (typo koruması): en yüksek RC major'ı + 1'den
-    # büyük major reddedilir. Hiç RC yoksa ilk cut kabul edilir.
+    # Major guard'ı (typo koruması): sadece en yüksek RC major'ın kendisi
+    # (idempotent re-run) veya +1'i (yeni cut) kabul edilir. Hiç RC yoksa
+    # ilk cut serbest.
     highest_major=$(list_tags "$repo" \
       | sed -nE 's/^v([0-9]+)\.[0-9]+\.[0-9]+-RC$/\1/p' \
       | sort -n | tail -1 || true)
-    if [[ -n "$highest_major" && "$NEW_MAJOR" -gt $((highest_major + 1)) ]]; then
-      ERRORS+=("$repo: girilen major v$NEW_MAJOR, mevcut en yüksek RC major'ı v$highest_major — en fazla v$((highest_major + 1)).0.0 kesilebilir (typo koruması)")
+    if [[ -n "$highest_major" ]]; then
+      if [[ "$NEW_MAJOR" -gt $((highest_major + 1)) ]]; then
+        ERRORS+=("$repo: girilen major v$NEW_MAJOR, mevcut en yüksek RC major'ı v$highest_major — en fazla v$((highest_major + 1)).0.0 kesilebilir (typo koruması)")
+      elif [[ "$NEW_MAJOR" -lt "$highest_major" ]]; then
+        ERRORS+=("$repo: girilen major v$NEW_MAJOR, mevcut en yüksek RC major'ından (v$highest_major) küçük — güncel main'den geriye dönük versiyon kesilemez. Yeni cut için v$((highest_major + 1)).0.0 kullanın (typo koruması)")
+      fi
     fi
   else
     # Kaynak: base release branch HEAD
@@ -153,7 +160,11 @@ for i in "${!REPO_LIST[@]}"; do
       SKIP_BRANCH[i]=1
       echo "$repo: $NEW_BRANCH zaten var ve $SOURCE_REF_DESC HEAD ile aynı — skip edilecek"
     else
-      ERRORS+=("$repo: $NEW_BRANCH branch'i zaten var ama SHA'sı $SOURCE_REF_DESC HEAD'den farklı ($existing_branch != $sha) — elle müdahale gerekli")
+      hint=""
+      if [[ "$MODE" == "release" ]]; then
+        hint=" Bu versiyon daha önce kesilmiş ve main o zamandan beri ilerlemiş olabilir — yeni bir cut istiyorsanız bir sonraki versiyonu girin."
+      fi
+      ERRORS+=("$repo: $NEW_BRANCH branch'i zaten var ama SHA'sı $SOURCE_REF_DESC HEAD'den farklı ($existing_branch != $sha) — elle müdahale gerekli.$hint")
     fi
   fi
 

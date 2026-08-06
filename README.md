@@ -1,124 +1,201 @@
-# git_cut_orchestration
+# Mobil Cut Alma Otomasyonu
 
-Assistbox mobil **cut alma sürecinin** GitHub Actions ile otomasyonu — test/deneme kurulumu.
+Assistbox mobil **cut alma sürecinin** GitHub Actions ile otomasyonu.
 
-Bu repo, gerçek ortamdaki `assistbox-mobile-release` orchestration reposunun prototipidir.
-Test için 3 dummy repo kullanılır:
+Bugün elle yapılan süreç (3 repoda branch oluştur → RC tag'i at → push), tek
+butonla, tüm kurallar otomatik doğrulanarak çalışır hale geliyor.
 
-| Dummy repo | Simüle ettiği repo |
-|---|---|
-| `yusufbingol/git_deneme` | `assistbox-ios` |
-| `yusufbingol/git_deneme_2` | `assistbox-android` |
-| `yusufbingol/git_deneme_3` | `assistbox-mobile-web-content` |
+> Bu repo deneme/prototip ortamıdır. Gerçek ortamdaki karşılıkları:
+>
+> | Test reposu | Gerçek repo |
+> |---|---|
+> | `git_deneme` | `assistbox-ios` |
+> | `git_deneme_2` | `assistbox-android` |
+> | `git_deneme_3` | `assistbox-mobile-web-content` |
 
-## Yapı
+---
+
+## 1. Süreç Kuralları (otomasyonun uyguladığı)
+
+Mevcut versioning/hotfix dokümanlarımızdaki kurallar birebir kod'a taşındı:
+
+**Normal cut (sprint sonu, `vX.0.0`):**
+- `main` HEAD'inden `vX.0.0` branch'i oluşturulur — 3 repoda birden
+- Branch'in oluşturulduğu commit'e `vX.0.0-RC` tag'i atılır (annotated)
+- Versiyon, mevcut en yüksek versiyonun major+1'i olmalıdır
+
+**Hotfix cut (`vX.Y.Z+1`):**
+- Asla `main`'den alınmaz — release edilmiş `vX.Y.Z` branch'inden alınır
+- Yeni versiyon **elle girilmez**, base'in patch+1'i olarak hesaplanır
+  (yanlış giriş riski sıfır)
+- Base versiyonun release edildiğinin kanıtı: `vX.Y.Z-FINAL` tag'i (zorunlu)
+- Base zaten hotfix'li release edilmişse zincir oradan devam eder
+  (v22.0.1-FINAL varken v22.0.0'dan hotfix alınamaz)
+- Web-content'te değişiklik olmasa bile 3 repoda da kesilir
+- RC tag'i cherry-pick'lerden **önce** atılır (dokümanla uyumlu)
+
+**Ya hep ya hiç:** Önce 3 repoda **tüm** validasyonlar çalışır (hiçbir yazma
+yapılmadan). Tek bir kural bile ihlal ediliyorsa hiçbir repoya dokunulmaz.
+
+---
+
+## 2. Kullanım
+
+Actions sekmesi → workflow seç → **Run workflow**:
+
+| Workflow | Input | Ne yapar |
+|---|---|---|
+| **Cut Release** | `version` (örn. `24.0.0`), `dry_run` | 3 repoda `main`'den `v24.0.0` + `v24.0.0-RC` |
+| **Cut Hotfix** | `base_version` (örn. `23.0.1`), `dry_run` | 3 repoda `v23.0.1`'den `v23.0.2` + `v23.0.2-RC` |
+
+**`dry_run: true`** ile önce prova yapılabilir: tüm validasyonlar çalışır,
+ne yapılacağı raporlanır, hiçbir şey pushlanmaz. Her run sonunda job
+summary'de repo × (SHA, branch, tag) durum tablosu ve tetikleyen kişi görünür.
+
+### Yapı
 
 ```
-git_cut_orchestration/
-├── .github/workflows/
-│   ├── cut-release.yml   # ince katman: input + concurrency → scripts/cut.sh
-│   └── cut-hotfix.yml    # ince katman: input + concurrency → scripts/cut.sh
-└── scripts/
-    └── cut.sh            # tüm ortak mantık (MODE=release|hotfix)
+.github/workflows/
+├── cut-release.yml   # ince katman: input + concurrency → scripts/cut.sh
+└── cut-hotfix.yml    # ince katman: input + concurrency → scripts/cut.sh
+scripts/
+└── cut.sh            # tüm cut mantığı (MODE=release|hotfix) — tek kaynak
 ```
 
-Cut mantığının tamamı `scripts/cut.sh`'ta — iki workflow arasında kopya kod yok,
+Mantığın tamamı `scripts/cut.sh`'ta: iki workflow arasında kopya kod yok,
 script lokalde de çalıştırılıp test edilebilir (shellcheck temiz):
 
 ```bash
 export GH_TOKEN=... OWNER=yusufbingol REPOS="git_deneme git_deneme_2 git_deneme_3"
-MODE=release VERSION=23.0.0 DRY_RUN=true ./scripts/cut.sh
-MODE=hotfix  BASE_VERSION=23.0.0 DRY_RUN=true ./scripts/cut.sh
+MODE=release VERSION=24.0.0 DRY_RUN=true ./scripts/cut.sh
+MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/cut.sh
 ```
 
-## Workflow'lar
+---
 
-### `cut-release.yml` — Normal Cut
+## 3. Handle Edilen Hatalar ve Guard'lar
 
-**Input:** `version` (örn. `23.0.0`, sadece `X.0.0` kabul edilir), `dry_run`
+### Girdi hataları
 
-**Akış (iki fazlı):**
-1. **Validate** (3 repoda, hiçbir yazma yok):
-   - Format `X.0.0` mi?
-   - `main` branch'i mevcut mu?
-   - **Major sıçrama guard'ı:** girilen major, mevcut en yüksek RC major'ının
-     en fazla +1'i olabilir (typo koruması, örn. `99.0.0` reddedilir)
-   - `vX.0.0` branch'i / `vX.0.0-RC` tag'i çakışıyor mu? (Aynı SHA'daysa → skip, farklıysa → hata)
-   - Herhangi biri failse **hiçbir repoya dokunulmaz**.
-2. **Execute:** Her repoda `main` HEAD'inden `vX.0.0` branch'i + aynı SHA'ya
-   **annotated** `vX.0.0-RC` tag'i (GitHub API ile, clone yok).
+| Hatalı giriş | Davranış |
+|---|---|
+| `23.1.0`, `23.0.1` (normal cut'ta) | Reddedilir — normal cut sadece `X.0.0` |
+| `v23.0.0`, `abc`, `23.0`, boş | Format regex'i reddeder |
+| `023.0.0`, `23.0.01` (başında sıfır) | Reddedilir (isim kirliliği/octal riski) |
+| `99.0.0` (ileri sıçrama) | Reddedilir — en fazla mevcut en yüksek major+1 |
+| `5.0.0` (geriye dönük, en son v23 iken) | Reddedilir — "yeni cut için v24.0.0 kullanın" |
+| Aynı versiyonu tekrar girmek (main değişmemiş) | Zararsız — idempotent skip |
+| Aynı versiyonu tekrar girmek (main ilerlemiş) | Reddedilir + "bir sonraki versiyonu girin" ipucu |
 
-### `cut-hotfix.yml` — Hotfix Cut
+### Süreç guard'ları (hotfix)
 
-**Input:** `base_version` (örn. `22.0.0`), `dry_run`
-**Yeni versiyon elle girilmez, hesaplanır:** base patch+1 → `22.0.1`
+| Durum | Davranış |
+|---|---|
+| Base branch mevcut değil | Reddedilir |
+| Base'in `-FINAL` tag'i yok (release edilmemiş) | Reddedilir (hard-fail) |
+| FINAL'den sonra base branch'e commit pushlanmış | Reddedilir (hard-fail) — hotfix release edilmemiş kod içeremez |
+| Serinin daha yüksek FINAL'i varken eski base | Reddedilir — zincir en yüksek FINAL'den devam etmeli |
+| Yeni branch/tag başka SHA'da zaten var | Reddedilir — elle inceleme istenir |
 
-**Hotfix'e özel validasyonlar (3 repoda):**
-1. `v{base}` branch'i mevcut mu?
-2. `v{base}-FINAL` tag'i var mı? → release kanıtı (**hard-fail**)
-3. **FINAL-HEAD tutarlılığı (hard-fail):** `v{base}` branch HEAD'i FINAL
-   tag'inin commit'iyle aynı mı? Farklıysa FINAL sonrası branch'e commit
-   pushlanmış demektir — hotfix release edilmemiş kod içerir, reddedilir.
-4. Base, o `major.minor` serisinin **en yüksek FINAL'i** mi? (örn. `v22.0.1-FINAL` varken base `22.0.0` girilirse hata)
-5. Yeni branch/tag çakışması yok mu?
+### Operasyonel güvenlik ağları
 
-**Execute:** `v{base}` HEAD'inden `v{new}` branch + `v{new}-RC` tag (cherry-pick'lerden **önce** — dokümanla uyumlu).
+- **İki fazlı validate→execute:** kısmi cut riski minimum; hata → sıfır yazma
+- **SHA validasyon anında sabitlenir:** validasyon ile push arasında main'e
+  commit gelse bile branch ve tag doğrulanan SHA'dan oluşur
+- **İdempotent re-run:** kısmi başarısızlıkta (örn. network) aynı input ile
+  güvenle yeniden çalıştırılır; tamamlanan repolar skip edilir
+- **Concurrency guard:** aynı versiyon için paralel çift tetikleme serileşir
+- **Annotated tag:** GitHub Desktop'ın ürettiğiyle aynı tip — mevcut
+  tag'lerle tutarlı (`git describe` vb. tooling sorunsuz)
+- **Audit:** push'lar bot kimliğiyle, job summary'de tetikleyen kişi
 
-## Güvenlik Ağları
+---
 
-- **İki fazlı validate→execute:** kısmi cut riski minimum
-- **SHA validasyon anında yakalanır:** execute aynı SHA'yı kullanır — validasyon
-  ile push arasında main'e commit gelse bile tutarlılık korunur
-- **İdempotent re-run:** branch/tag zaten var ve doğru SHA'da → skip; farklı SHA'da → hata (elle müdahale)
-- **Concurrency guard:** aynı versiyon için paralel çift tetikleme serileştirilir
-- **Annotated tag:** GitHub Desktop'ın ürettiğiyle aynı tip (önce tag objesi,
-  sonra ref) — mevcut tag'lerle tutarlı, `git describe` vb. tooling sorunsuz
-- **`dry_run` modu:** validasyonları çalıştırır, ne yapılacağını job summary'de gösterir, push yapmaz
-- **Job summary:** her run sonunda repo × (SHA, branch, tag) durum tablosu + tetikleyen kişi
+## 4. Handle EDİLMEYEN Durumlar (bilinen sınırlar)
 
-> Not (testte öğrenildi): GitHub API'de ref güncellemesinden hemen sonra okuma,
-> read-replica gecikmesiyle eski değer döndürebilir. Cut akışı bundan etkilenmez
-> (SHA bir kez okunur, aynı SHA ile yazılır) ama testlerde peş peşe
-> yaz-oku yaparken birkaç saniye beklemek gerekebilir.
+| Durum | Neden / Etki |
+|---|---|
+| **Niyet hatası:** hotfix'te base yerine hedef versiyonu girmek (base `23.0.1` yerine `23.0.2` girmek) ve `v23.0.2` tesadüfen geçerli bir base ise | Script niyeti bilemez; teknik olarak geçerli bir cut oluşur. Mitigasyon: summary'de "Base → Yeni" net gösteriliyor + dry_run alışkanlığı. Kalıcı çözüm: dropdown (bkz. Sonraki Fazlar) |
+| **Execute fazı atomik değil:** push sırasında beklenmedik hata (token, ruleset, network) → bazı repolar kesilmiş kalabilir | İdempotent re-run ile telafi edilir; "asla yarım kalmaz" değil, "yarım kalırsa güvenle tamamlanır" garantisi |
+| **Farklı versiyonlar paralel tetiklenirse** teorik yarış penceresi | Concurrency grubu versiyon bazlı; pratikte guard'lar yakalar, risk ihmal edilebilir |
+| **Lokal çalıştırmada `DRY_RUN=True`** (büyük T) gerçek run olur | Sadece lokal kullanım footgun'ı; Actions boolean input'u her zaman küçük harf üretir |
+| **Eski versiyona müşteri-özel hotfix** | Bilinçli olarak reddediliyor — bkz. Açık Sorular #1 |
 
-## Kurulum
+---
 
-1. Bu klasörü GitHub'da bir repo olarak yayınla (örn. `yusufbingol/git_cut_orchestration`).
-2. **Token:**
-   - **Test ortamı (bu kurulum):** Fine-grained PAT oluştur — Repository access: 3 dummy repo, Permission: `Contents: Read & Write`. Repo secrets'a `RELEASE_BOT_TOKEN` adıyla ekle.
-   - **Gerçek ortam:** GitHub App (`assistbox-release-bot`) — `Contents: R/W`, sadece 3 repoya install. Workflow'daki yorum satırındaki `actions/create-github-app-token` adımını aç, `APP_ID` / `APP_PRIVATE_KEY` secret'larını ekle.
-3. Actions sekmesinden `Cut Release` veya `Cut Hotfix` workflow'unu `Run workflow` ile tetikle (önce `dry_run: true` önerilir).
+## 5. Kurulum (gerçek ortama geçiş)
 
-## Test Durumu
+1. **Orchestration reposu:** bu yapı `assistbox-mobile-release` gibi bir repoya taşınır.
+2. **GitHub App** (`assistbox-release-bot`): izin `Contents: Read & Write`,
+   sadece 3 repo + orchestration reposuna install. `APP_ID` /
+   `APP_PRIVATE_KEY` secret'ları eklenir, workflow'lardaki
+   `create-github-app-token` adımı açılır.
+   *(Test ortamında fine-grained PAT `RELEASE_BOT_TOKEN` kullanılıyor.)*
+3. **Ruleset bypass:** repolarda `v*` tag/branch protection ruleset'i varsa
+   GitHub App bypass listesine eklenmeli — yoksa cut push'ları reddedilir.
+4. **FINAL backfill:** release edilmiş ama FINAL tag'i eksik geçmiş
+   versiyonlar taranıp elle FINAL atılmalı (örn. v6.9.7, v6.9.9) — aksi halde
+   bu versiyonlara hotfix gerektiğinde guard yanlış alarm verir.
+5. Workflow'lardaki `OWNER` / `REPOS` değerleri gerçek repolarla güncellenir.
 
-`scripts/cut.sh` lokalde gerçek `gh` ile uçtan uca test edildi (2026-08-05).
-Dummy repolarda şu an mevcut durum: `v23.0.0` + `v23.0.1` branch'leri,
-`-RC` ve `-FINAL` tag'leri (hepsi annotated).
+---
 
-Geçen senaryolar:
-1. ✅ Release dry-run + gerçek cut (`v23.0.0`, 3 repoda branch + annotated RC)
-2. ✅ İdempotent re-run (skip)
-3. ✅ Format guard (`23.1.0` reddedildi)
-4. ✅ Major sıçrama guard'ı (`99.0.0` reddedildi)
-5. ✅ FINAL yokken hotfix reddi
-6. ✅ Hotfix mutlu yol (`23.0.0` → `v23.0.1`)
-7. ✅ Zincir guard'ı (`v23.0.1-FINAL` varken base `23.0.0` reddedildi)
-8. ✅ FINAL-HEAD tutarlılık guard'ı (FINAL sonrası commit → hard-fail)
+## 6. Test Durumu
 
-GitHub Actions üzerinde test için: bu klasörü repo olarak yayınla,
-`RELEASE_BOT_TOKEN` secret'ını ekle, `dry_run: true` ile tetikle.
-(İdempotency sayesinde mevcut `v23.x` durumu sorun çıkarmaz; temiz test
-için `24.0.0` kullanılabilir.)
+`scripts/cut.sh` lokalde gerçek GitHub API ile uçtan uca test edildi
+(2026-08-05). Dummy repolarda test artefaktı olarak `v23.0.0` / `v23.0.1`
+branch'leri + RC/FINAL tag'leri duruyor (hepsi annotated).
 
-## Kapsam Dışı (Faz-2)
+Geçen senaryolar (17):
+- Release: dry-run, gerçek cut, idempotent re-run, format/leading-zero
+  guard'ları, ileri ve geri major guard'ları
+- Hotfix: FINAL yokken red, mutlu yol (v23.0.0 → v23.0.1), zincir guard'ı,
+  FINAL-HEAD tutarlılık guard'ı (hard-fail), format guard'ları
+- Annotated tag tipi API'den doğrulandı (`object.type=tag`)
 
-- FINAL tag'leme workflow'u (`tag-final.yml`)
-- Jenkins/Bitrise build tetikleme
-- Jira release task oluşturma, Slack bildirimi
-- Minor cut (`vX.Y.0`, Y>0)
+---
 
-## Open Questions
+## 7. Sonraki Fazlar
 
-1. **Eski versiyona müşteri-özel hotfix:** Canlıda `v22.0.2` varken müşterideki `v22.0.1` üzerine hotfix çıkmak gerekirse mevcut `vX.Y.Z` şemasında yeri yok. Adaylar: 4. segment (`v22.0.1.1`) veya suffix (`v22.0.1-cust-acme.1`). Karar verilene kadar workflow bu durumu **reddediyor** (en yüksek FINAL guard'ı).
-2. Minor cut semantiği: `main`'den mi, release branch'inden mi?
-3. FINAL tag otomasyonu: hard-fail guard geçmişteki eksik FINAL'leri yüzeye çıkaracak — eski versiyonlara elle FINAL atmak gerekebilir.
+1. **Hotfix input'unu dropdown yapma (niyet hatası çözümü):**
+   GitHub Actions'ta `workflow_dispatch` dropdown'ı (`type: choice`) **sadece
+   statik liste** destekler — seçenekler API'den dinamik doldurulamaz, YAML
+   dosyasına yazılı olmak zorunda. Seçenekler:
+   - *Self-updating workflow:* her cut/FINAL sonrası bir bot commit'i,
+     workflow YAML'ındaki `options:` listesini günceller (son N release
+     branch'i, yeniden eskiye). Teknik olarak mümkün, orta karmaşıklık.
+   - *Alternatif:* dropdown yerine mevcut serbest metin + guard'lar
+     (bugünkü durum) — guard'lar zaten yanlış base'lerin büyük kısmını
+     yakalıyor.
+   - Ekip kararı bekliyor: self-update karmaşıklığına değer mi?
+2. **`tag-final.yml`:** production release sonrası FINAL tag'leme workflow'u
+   (aynı validate→execute desenli).
+3. **Build tetikleme:** cut sonrası assistbox-ios / assistbox-android için
+   Jenkins/Bitrise `app_release` tetiklemesi.
+4. **Jira entegrasyonu:** "Assistbox Mobile Release vX.Y.Z" task'ının
+   otomatik oluşturulması (team/label/assignee).
+5. **Slack bildirimi:** cut sonucu özeti.
+6. **Onay katmanı (opsiyonel):** GitHub Environment + required reviewer ile
+   execute fazına onay şartı.
+
+---
+
+## 8. Açık Sorular
+
+1. **Eski versiyona müşteri-özel hotfix:** Canlıda `v22.0.2` varken
+   müşterideki `v22.0.1` üzerine hotfix çıkmak gerekirse mevcut `vX.Y.Z`
+   şemasında yeri yok. Adaylar: 4. segment (`v22.0.1.1`) veya suffix
+   (`v22.0.1-cust-acme.1`). Store versiyonlama ve CI guard'larıyla
+   etkileşimi düşünülmeli. **Karar verilene kadar workflow bu durumu
+   reddediyor.**
+2. **Minor cut (`vX.Y.0`, Y>0) semantiği:** main'den mi, release
+   branch'inden mi kesilecek? Netleşince workflow'a eklenecek.
+3. **FINAL backfill kapsamı:** geçmişte hangi versiyonların FINAL'i eksik,
+   hangileri gerçekten release edildi? Go-live öncesi bir kerelik tarama.
+
+---
+
+> **Teknik not:** GitHub API'de ref yazımından hemen sonra okuma,
+> read-replica gecikmesiyle eski değer döndürebilir. Cut akışı bundan
+> etkilenmez (SHA bir kez okunur, aynı SHA ile yazılır) ama testlerde peş
+> peşe yaz-oku yaparken birkaç saniye beklemek gerekebilir.
