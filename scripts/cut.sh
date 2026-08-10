@@ -99,39 +99,43 @@ read -r -a REPO_LIST <<< "$REPOS"
 SRC_SHA=(); SKIP_BRANCH=(); SKIP_TAG=()
 
 # ---------- Faz 0.5 (hotfix): eski base tespiti ----------
-# Tüm repolardaki EN YÜKSEK FINAL (seri farketmeksizin) base'den yeniyse bu
-# bir "eski base" hotfix'idir (örn. canlıda v22.0.2 varken v22.0.1'den veya
-# v21.0.1'den cut). Varsayılan: red. ALLOW_STALE_BASE=true ise (workflow'da
-# environment approval sonrası) devam edilir; yeni versiyon base'in KENDİ
-# serisinde kalır ve çakışmasın diye serinin en yüksek FINAL'inin patch+1'i olur.
+# "Eski base" iki durumda oluşur:
+#   a) Base'in KENDİ serisinde daha yeni bir kesim (RC veya FINAL) var
+#      (örn. v23.0.2 kesilmişken base 23.0.1) — zincir en yeniden sürmeli.
+#   b) Daha yüksek bir seride release edilmiş (FINAL) versiyon var
+#      (örn. canlıda v22.0.2 varken base 21.0.1).
+# Not: üst seride sadece RC olması (yeni major kesilmiş ama release
+# edilmemiş) eski base sayılmaz — önceki serinin hotfix'i normal akıştır.
+# Varsayılan: red. ALLOW_STALE_BASE=true ise (workflow'da environment
+# approval sonrası) devam edilir; yeni versiyon base'in kendi serisinde,
+# mevcut kesimlerle çakışmasın diye serinin en yüksek kesiminin patch+1'i olur.
 STALE_BASE=false
 APPROVAL_MESSAGE=""
 if [[ "$MODE" == "hotfix" ]]; then
-  ALL_FINALS=""
+  ALL_FINALS=""; SERIES_CUTS=""
   for repo in "${REPO_LIST[@]}"; do
-    finals=$(list_tags "$repo" \
-      | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)-FINAL$/\1/p' || true)
-    ALL_FINALS+="$finals"$'\n'
+    tags=$(list_tags "$repo" || true)
+    ALL_FINALS+=$(printf '%s' "$tags" | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)-FINAL$/\1/p')$'\n'
+    SERIES_CUTS+=$(printf '%s' "$tags" | sed -nE "s/^v$MAJOR\.$MINOR\.([0-9]+)-(RC|FINAL)\$/\1/p")$'\n'
   done
-  # Global en yüksek FINAL (semver sıralı) — hiç FINAL yoksa boş.
-  GLOBAL_HIGHEST=$(printf '%s' "$ALL_FINALS" | grep -v '^$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 || true)
-  # Base'in kendi serisindeki en yüksek FINAL patch'i (versiyon hesabı için).
-  HIGHEST_FINAL_PATCH=$(printf '%s' "$ALL_FINALS" \
-    | sed -nE "s/^$MAJOR\.$MINOR\.([0-9]+)\$/\1/p" \
-    | sort -n | tail -1 || true)
-  HIGHEST_FINAL_PATCH="${HIGHEST_FINAL_PATCH:-$PATCH}"
-  (( HIGHEST_FINAL_PATCH < PATCH )) && HIGHEST_FINAL_PATCH="$PATCH"
+  # Base serisindeki en yüksek kesilmiş patch (RC veya FINAL).
+  HIGHEST_CUT_PATCH=$(printf '%s' "$SERIES_CUTS" | grep -v '^$' | sort -n | tail -1 || true)
+  HIGHEST_CUT_PATCH="${HIGHEST_CUT_PATCH:-$PATCH}"
+  (( HIGHEST_CUT_PATCH < PATCH )) && HIGHEST_CUT_PATCH="$PATCH"
+  # Referans versiyon: max(global en yüksek FINAL, seri içi en yüksek kesim).
+  REFERENCE=$(printf '%s\n%s\n' "$ALL_FINALS" "$MAJOR.$MINOR.$HIGHEST_CUT_PATCH" \
+    | grep -v '^$' | sort -u -t. -k1,1n -k2,2n -k3,3n | tail -1 || true)
 
-  if [[ -n "$GLOBAL_HIGHEST" && "$GLOBAL_HIGHEST" != "$BASE_VERSION" ]] \
-     && [[ "$(printf '%s\n%s\n' "$GLOBAL_HIGHEST" "$BASE_VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "$GLOBAL_HIGHEST" ]]; then
+  if [[ -n "$REFERENCE" && "$REFERENCE" != "$BASE_VERSION" ]] \
+     && [[ "$(printf '%s\n%s\n' "$REFERENCE" "$BASE_VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "$REFERENCE" ]]; then
     if [[ "$ALLOW_STALE_BASE" != "true" ]]; then
-      echo "::error::v$GLOBAL_HIGHEST-FINAL mevcutken eski base v$BASE_VERSION üzerinden hotfix onay gerektirir — workflow üzerinden çalıştırın (environment approval) veya lokalde bilinçli olarak ALLOW_STALE_BASE=true verin."
+      echo "::error::v$REFERENCE mevcutken eski base v$BASE_VERSION üzerinden hotfix onay gerektirir — workflow üzerinden çalıştırın (environment approval) veya lokalde bilinçli olarak ALLOW_STALE_BASE=true verin."
       exit 1
     fi
     STALE_BASE=true
-    NEW_VERSION="$MAJOR.$MINOR.$((HIGHEST_FINAL_PATCH + 1))"
+    NEW_VERSION="$MAJOR.$MINOR.$((HIGHEST_CUT_PATCH + 1))"
     TITLE="Cut Hotfix v$NEW_VERSION (base: v$BASE_VERSION — ESKİ BASE)"
-    APPROVAL_MESSAGE="v$GLOBAL_HIGHEST canlıda, v$BASE_VERSION üzerinden v$NEW_VERSION alınacak. Onaylıyor musunuz?"
+    APPROVAL_MESSAGE="v$REFERENCE canlıda, v$BASE_VERSION üzerinden v$NEW_VERSION alınacak. Onaylıyor musunuz?"
     echo "⚠️  Eski base tespit edildi: $APPROVAL_MESSAGE"
   fi
   echo "Base: v$BASE_VERSION → Yeni hotfix versiyonu: v$NEW_VERSION"
