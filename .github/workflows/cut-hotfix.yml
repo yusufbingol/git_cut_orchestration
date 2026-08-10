@@ -18,16 +18,70 @@ concurrency:
   group: cut-hotfix-${{ inputs.base_version }}
   cancel-in-progress: false
 
+# Gerçek ortamda GitHub App token'ı önerilir (bkz. cut-release.yml).
+# Test ortamında fine-grained PAT (Contents: R/W) RELEASE_BOT_TOKEN secret'ı olarak kullanılıyor.
+
 jobs:
-  cut-hotfix:
+  # Faz 1: her zaman dry-run validasyon. Eski base tespitinde fail etmez
+  # (ALLOW_STALE_BASE=true), bunun yerine needs_approval output'u üretir.
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_approval: ${{ steps.validate.outputs.needs_approval }}
+      new_version: ${{ steps.validate.outputs.new_version }}
+      approval_message: ${{ steps.validate.outputs.approval_message }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate (dry run)
+        id: validate
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          OWNER: yusufbingol
+          # Gerçek ortamda: assistbox-ios assistbox-android assistbox-mobile-web-content
+          REPOS: git_deneme git_deneme_2 git_deneme_3
+          MODE: hotfix
+          BASE_VERSION: ${{ inputs.base_version }}
+          DRY_RUN: "true"
+          ALLOW_STALE_BASE: "true"
+        run: ./scripts/cut.sh
+
+      - name: Show approval request
+        if: steps.validate.outputs.needs_approval == 'true'
+        run: |
+          {
+            echo "## ⚠️ Onay Gerekli — Eski Base'den Hotfix"
+            echo ""
+            echo "> ${{ steps.validate.outputs.approval_message }}"
+            echo ""
+            echo "Devam etmek için **approve-stale-base** job'ını onaylayın; reddetmek için reject edin."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Faz 1.5: sadece eski base tespit edilirse çalışır — hotfix-approval
+  # environment'ının required reviewer'ı onay verene kadar bekler.
+  approve-stale-base:
+    needs: validate
+    if: needs.validate.outputs.needs_approval == 'true'
+    runs-on: ubuntu-latest
+    environment: hotfix-approval
+    steps:
+      - name: Approval received
+        run: |
+          echo "Onay alındı: ${{ needs.validate.outputs.approval_message }}"
+
+  # Faz 2: gerçek cut. Onay job'ı ya başarıyla geçmiş ya da (güncel base'de)
+  # skip edilmiş olmalı; validate her koşulda başarılı olmalı.
+  cut:
+    needs: [validate, approve-stale-base]
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      (needs.approve-stale-base.result == 'success' || needs.approve-stale-base.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Gerçek ortamda GitHub App token'ı önerilir (bkz. cut-release.yml).
-      # Test ortamında fine-grained PAT (Contents: R/W) RELEASE_BOT_TOKEN secret'ı olarak kullanılıyor.
-
-      - name: Validate and cut hotfix
+      - name: Cut hotfix
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
           OWNER: yusufbingol
@@ -36,4 +90,6 @@ jobs:
           MODE: hotfix
           BASE_VERSION: ${{ inputs.base_version }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # Eski base ise buraya sadece approval'dan geçilerek ulaşılır.
+          ALLOW_STALE_BASE: ${{ needs.validate.outputs.needs_approval }}
         run: ./scripts/cut.sh

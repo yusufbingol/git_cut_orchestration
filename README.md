@@ -31,6 +31,11 @@ Mevcut versioning/hotfix dokümanlarımızdaki kurallar birebir kod'a taşındı
 - Base versiyonun release edildiğinin kanıtı: `vX.Y.Z-FINAL` tag'i (zorunlu)
 - Base zaten hotfix'li release edilmişse zincir oradan devam eder
   (v22.0.1-FINAL varken v22.0.0'dan hotfix alınamaz)
+- **Eski base'den hotfix onayla mümkün:** serinin daha yüksek FINAL'i varken
+  eski base girilirse workflow otomatik reddetmek yerine **environment
+  approval** ister ("v22.0.2 canlıda, v22.0.1 üzerinden v22.0.3 alınacak.
+  Onaylıyor musunuz?"); onay verilirse yeni versiyon çakışmayı önlemek için
+  serinin en yüksek FINAL'inin patch+1'i olur
 - Web-content'te değişiklik olmasa bile 3 repoda da kesilir
 - RC tag'i cherry-pick'lerden **önce** atılır (dokümanla uyumlu)
 
@@ -52,12 +57,30 @@ Actions sekmesi → workflow seç → **Run workflow**:
 ne yapılacağı raporlanır, hiçbir şey pushlanmaz. Her run sonunda job
 summary'de repo × (SHA, branch, tag) durum tablosu ve tetikleyen kişi görünür.
 
+### Hotfix'te eski base onay akışı
+
+Cut Hotfix üç job'dan oluşur: `validate` → `approve-stale-base` → `cut`.
+
+- **Güncel base** (serinin en yüksek FINAL'i): `approve-stale-base` skip
+  edilir, cut doğrudan devam eder — davranış eskisiyle aynı.
+- **Eski base** (örn. canlıda `v22.0.2` varken `22.0.1` girilirse):
+  `validate` job summary'sine onay mesajı yazar
+  (*"v22.0.2 canlıda, v22.0.1 üzerinden v22.0.3 alınacak. Onaylıyor
+  musunuz?"*) ve `approve-stale-base` job'ı `hotfix-approval`
+  environment'ının required reviewer'ı onay verene kadar bekler.
+  - **Onay** → cut, serinin en yüksek FINAL'inin patch+1'i ile devam eder
+    (`v22.0.3` — `v22.0.2` ile çakışmaz).
+  - **Red** → workflow durur, hiçbir repoya yazılmaz.
+
+Böylece yanlışlıkla eski branch üzerinden cut alınması engellenir; bilinçli
+(müşteri-özel) durumlarda ise ikinci bir göz onayıyla yol açılır.
+
 ### Yapı
 
 ```
 .github/workflows/
 ├── cut-release.yml   # ince katman: input + concurrency → scripts/cut.sh
-└── cut-hotfix.yml    # ince katman: input + concurrency → scripts/cut.sh
+└── cut-hotfix.yml    # validate → (eski base ise approval) → cut → scripts/cut.sh
 scripts/
 └── cut.sh            # tüm cut mantığı (MODE=release|hotfix) — tek kaynak
 ```
@@ -69,6 +92,8 @@ script lokalde de çalıştırılıp test edilebilir (shellcheck temiz):
 export GH_TOKEN=... OWNER=yusufbingol REPOS="git_deneme git_deneme_2 git_deneme_3"
 MODE=release VERSION=24.0.0 DRY_RUN=true ./scripts/cut.sh
 MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/cut.sh
+# Eski base'den bilinçli cut (workflow'da bunun yerine environment approval var):
+MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cut.sh
 ```
 
 ---
@@ -94,7 +119,7 @@ MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/cut.sh
 | Base branch mevcut değil | Reddedilir |
 | Base'in `-FINAL` tag'i yok (release edilmemiş) | Reddedilir (hard-fail) |
 | FINAL'den sonra base branch'e commit pushlanmış | Reddedilir (hard-fail) — hotfix release edilmemiş kod içeremez |
-| Serinin daha yüksek FINAL'i varken eski base | Reddedilir — zincir en yüksek FINAL'den devam etmeli |
+| Serinin daha yüksek FINAL'i varken eski base | **Environment approval** istenir — onaylanırsa en yüksek FINAL patch+1 ile devam, reddedilirse durur |
 | Yeni branch/tag başka SHA'da zaten var | Reddedilir — elle inceleme istenir |
 
 ### Operasyonel güvenlik ağları
@@ -119,7 +144,7 @@ MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/cut.sh
 | **Execute fazı atomik değil:** push sırasında beklenmedik hata (token, ruleset, network) → bazı repolar kesilmiş kalabilir | İdempotent re-run ile telafi edilir; "asla yarım kalmaz" değil, "yarım kalırsa güvenle tamamlanır" garantisi |
 | **Farklı versiyonlar paralel tetiklenirse** teorik yarış penceresi | Concurrency grubu versiyon bazlı; pratikte guard'lar yakalar, risk ihmal edilebilir |
 | **Lokal çalıştırmada `DRY_RUN=True`** (büyük T) gerçek run olur | Sadece lokal kullanım footgun'ı; Actions boolean input'u her zaman küçük harf üretir |
-| **Eski versiyona müşteri-özel hotfix** | Bilinçli olarak reddediliyor — bkz. Açık Sorular #1 |
+| **Eski base cut'ında versiyon şeması** | Onaylı eski base cut'ı normal `vX.Y.Z` şemasında devam eder (en yüksek FINAL+1); müşteri-özel suffix/4. segment şeması hâlâ açık — bkz. Açık Sorular #1 |
 
 ---
 
@@ -136,7 +161,15 @@ MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/cut.sh
 4. **FINAL backfill:** release edilmiş ama FINAL tag'i eksik geçmiş
    versiyonlar taranıp elle FINAL atılmalı (örn. v6.9.7, v6.9.9) — aksi halde
    bu versiyonlara hotfix gerektiğinde guard yanlış alarm verir.
-5. Workflow'lardaki `OWNER` / `REPOS` değerleri gerçek repolarla güncellenir.
+5. **`hotfix-approval` environment'ı:** orchestration reposunda
+   Settings → Environments → New environment → `hotfix-approval`.
+   - **Required reviewers:** eski base'den cut'ı onaylayabilecek kişiler
+     (örn. release sorumluları) eklenir — en az 1 kişi zorunlu, yoksa
+     approval job'ı beklemeden geçer.
+   - **Prevent self-review:** cut'ı tetikleyen kişinin kendi isteğini
+     onaylayamaması isteniyorsa **açık** olmalı (önerilen); tek kişilik
+     ekipte/testte kapalı bırakılabilir.
+6. Workflow'lardaki `OWNER` / `REPOS` değerleri gerçek repolarla güncellenir.
 
 ---
 
@@ -175,19 +208,22 @@ Geçen senaryolar (17):
 4. **Jira entegrasyonu:** "Assistbox Mobile Release vX.Y.Z" task'ının
    otomatik oluşturulması (team/label/assignee).
 5. **Slack bildirimi:** cut sonucu özeti.
-6. **Onay katmanı (opsiyonel):** GitHub Environment + required reviewer ile
-   execute fazına onay şartı.
+6. **Onay katmanı (opsiyonel):** eski base hotfix'i için environment
+   approval **eklendi** (`hotfix-approval`); istenirse aynı desen tüm
+   execute fazlarına genişletilebilir.
 
 ---
 
 ## 8. Açık Sorular
 
-1. **Eski versiyona müşteri-özel hotfix:** Canlıda `v22.0.2` varken
-   müşterideki `v22.0.1` üzerine hotfix çıkmak gerekirse mevcut `vX.Y.Z`
-   şemasında yeri yok. Adaylar: 4. segment (`v22.0.1.1`) veya suffix
+1. **Eski versiyona müşteri-özel hotfix — versiyon şeması:** Eski base'den
+   cut artık **environment approval ile destekleniyor** (yukarıda anlatıldı):
+   onay sonrası yeni versiyon serinin en yüksek FINAL'inin patch+1'i olur
+   (canlıda `v22.0.2` varken `v22.0.1` base'inden `v22.0.3` kesilir — normal
+   şemada, çakışmasız). Açık kalan kısım: müşteri-özel kalıcı bir ayrım
+   gerekirse şema adayları 4. segment (`v22.0.1.1`) veya suffix
    (`v22.0.1-cust-acme.1`). Store versiyonlama ve CI guard'larıyla
-   etkileşimi düşünülmeli. **Karar verilene kadar workflow bu durumu
-   reddediyor.**
+   etkileşimi düşünülmeli.
 2. **Minor cut (`vX.Y.0`, Y>0) semantiği:** main'den mi, release
    branch'inden mi kesilecek? Netleşince workflow'a eklenecek.
 3. **FINAL backfill kapsamı:** geçmişte hangi versiyonların FINAL'i eksik,

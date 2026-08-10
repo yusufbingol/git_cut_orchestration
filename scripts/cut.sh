@@ -11,6 +11,9 @@ set -euo pipefail
 : "${REPOS:?REPOS gerekli}"
 : "${MODE:?MODE gerekli (release|hotfix)}"
 DRY_RUN="${DRY_RUN:-false}"
+# Eski base onayı: serinin daha yüksek FINAL'i varken eski base'den hotfix'e
+# izin verir (workflow'da environment approval sonrası true geçilir).
+ALLOW_STALE_BASE="${ALLOW_STALE_BASE:-false}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 # ---------- Yardımcılar ----------
@@ -86,17 +89,56 @@ elif [[ "$MODE" == "hotfix" ]]; then
   NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
   SOURCE_REF_DESC="v$BASE_VERSION"
   TITLE="Cut Hotfix v$NEW_VERSION (base: v$BASE_VERSION)"
-  echo "Base: v$BASE_VERSION → Yeni hotfix versiyonu: v$NEW_VERSION"
 else
   echo "::error::Geçersiz MODE: $MODE (release|hotfix)"
   exit 1
 fi
 
-NEW_BRANCH="v$NEW_VERSION"
-RC_TAG="v$NEW_VERSION-RC"
 ERRORS=()
 read -r -a REPO_LIST <<< "$REPOS"
 SRC_SHA=(); SKIP_BRANCH=(); SKIP_TAG=()
+
+# ---------- Faz 0.5 (hotfix): eski base tespiti ----------
+# Serinin (major.minor) en yüksek FINAL'i base'den yeniyse bu bir "eski base"
+# hotfix'idir (örn. canlıda v22.0.2 varken v22.0.1'den cut). Varsayılan: red.
+# ALLOW_STALE_BASE=true ise (workflow'da environment approval sonrası) devam
+# edilir ve versiyon çakışmasın diye yeni versiyon en yüksek FINAL+1 olur.
+STALE_BASE=false
+APPROVAL_MESSAGE=""
+if [[ "$MODE" == "hotfix" ]]; then
+  HIGHEST_FINAL_PATCH="$PATCH"
+  for repo in "${REPO_LIST[@]}"; do
+    p=$(list_tags "$repo" \
+      | sed -nE "s/^v$MAJOR\.$MINOR\.([0-9]+)-FINAL\$/\1/p" \
+      | sort -n | tail -1 || true)
+    if [[ -n "$p" && "$p" -gt "$HIGHEST_FINAL_PATCH" ]]; then
+      HIGHEST_FINAL_PATCH="$p"
+    fi
+  done
+  if (( HIGHEST_FINAL_PATCH > PATCH )); then
+    if [[ "$ALLOW_STALE_BASE" != "true" ]]; then
+      echo "::error::v$MAJOR.$MINOR.$HIGHEST_FINAL_PATCH-FINAL mevcutken eski base v$BASE_VERSION üzerinden hotfix onay gerektirir — workflow üzerinden çalıştırın (environment approval) veya lokalde bilinçli olarak ALLOW_STALE_BASE=true verin."
+      exit 1
+    fi
+    STALE_BASE=true
+    NEW_VERSION="$MAJOR.$MINOR.$((HIGHEST_FINAL_PATCH + 1))"
+    TITLE="Cut Hotfix v$NEW_VERSION (base: v$BASE_VERSION — ESKİ BASE)"
+    APPROVAL_MESSAGE="v$MAJOR.$MINOR.$HIGHEST_FINAL_PATCH canlıda, v$BASE_VERSION üzerinden v$NEW_VERSION alınacak. Onaylıyor musunuz?"
+    echo "⚠️  Eski base tespit edildi: $APPROVAL_MESSAGE"
+  fi
+  echo "Base: v$BASE_VERSION → Yeni hotfix versiyonu: v$NEW_VERSION"
+  # Workflow'un approval job'ına karar verdirmek için output'lar.
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      echo "needs_approval=$STALE_BASE"
+      echo "new_version=$NEW_VERSION"
+      echo "approval_message=$APPROVAL_MESSAGE"
+    } >> "$GITHUB_OUTPUT"
+  fi
+fi
+
+NEW_BRANCH="v$NEW_VERSION"
+RC_TAG="v$NEW_VERSION-RC"
 
 # ---------- Faz 1: tüm repolarda validasyon (yazma yok) ----------
 
@@ -144,11 +186,14 @@ for i in "${!REPO_LIST[@]}"; do
     fi
 
     # Base, o major.minor serisinin en yüksek FINAL'i mi?
-    highest_final_patch=$(list_tags "$repo" \
-      | sed -nE "s/^v$MAJOR\.$MINOR\.([0-9]+)-FINAL\$/\1/p" \
-      | sort -n | tail -1 || true)
-    if [[ -n "$highest_final_patch" && "$highest_final_patch" -gt "$PATCH" ]]; then
-      ERRORS+=("$repo: v$MAJOR.$MINOR.$highest_final_patch-FINAL mevcut — hotfix zinciri v$MAJOR.$MINOR.$highest_final_patch üzerinden devam etmeli (eski versiyona müşteri-özel hotfix v1'de desteklenmiyor, bkz. Open Questions)")
+    # (Eski base durumu Faz 0.5'te global olarak yakalanır; onaylıysa geçilir.)
+    if [[ "$ALLOW_STALE_BASE" != "true" ]]; then
+      highest_final_patch=$(list_tags "$repo" \
+        | sed -nE "s/^v$MAJOR\.$MINOR\.([0-9]+)-FINAL\$/\1/p" \
+        | sort -n | tail -1 || true)
+      if [[ -n "$highest_final_patch" && "$highest_final_patch" -gt "$PATCH" ]]; then
+        ERRORS+=("$repo: v$MAJOR.$MINOR.$highest_final_patch-FINAL mevcut — hotfix zinciri v$MAJOR.$MINOR.$highest_final_patch üzerinden devam etmeli (eski base'den cut onay gerektirir)")
+      fi
     fi
   fi
   SRC_SHA[i]=$sha
