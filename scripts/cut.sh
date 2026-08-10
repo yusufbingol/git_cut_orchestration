@@ -99,31 +99,39 @@ read -r -a REPO_LIST <<< "$REPOS"
 SRC_SHA=(); SKIP_BRANCH=(); SKIP_TAG=()
 
 # ---------- Faz 0.5 (hotfix): eski base tespiti ----------
-# Serinin (major.minor) en yüksek FINAL'i base'den yeniyse bu bir "eski base"
-# hotfix'idir (örn. canlıda v22.0.2 varken v22.0.1'den cut). Varsayılan: red.
-# ALLOW_STALE_BASE=true ise (workflow'da environment approval sonrası) devam
-# edilir ve versiyon çakışmasın diye yeni versiyon en yüksek FINAL+1 olur.
+# Tüm repolardaki EN YÜKSEK FINAL (seri farketmeksizin) base'den yeniyse bu
+# bir "eski base" hotfix'idir (örn. canlıda v22.0.2 varken v22.0.1'den veya
+# v21.0.1'den cut). Varsayılan: red. ALLOW_STALE_BASE=true ise (workflow'da
+# environment approval sonrası) devam edilir; yeni versiyon base'in KENDİ
+# serisinde kalır ve çakışmasın diye serinin en yüksek FINAL'inin patch+1'i olur.
 STALE_BASE=false
 APPROVAL_MESSAGE=""
 if [[ "$MODE" == "hotfix" ]]; then
-  HIGHEST_FINAL_PATCH="$PATCH"
+  ALL_FINALS=""
   for repo in "${REPO_LIST[@]}"; do
-    p=$(list_tags "$repo" \
-      | sed -nE "s/^v$MAJOR\.$MINOR\.([0-9]+)-FINAL\$/\1/p" \
-      | sort -n | tail -1 || true)
-    if [[ -n "$p" && "$p" -gt "$HIGHEST_FINAL_PATCH" ]]; then
-      HIGHEST_FINAL_PATCH="$p"
-    fi
+    finals=$(list_tags "$repo" \
+      | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)-FINAL$/\1/p' || true)
+    ALL_FINALS+="$finals"$'\n'
   done
-  if (( HIGHEST_FINAL_PATCH > PATCH )); then
+  # Global en yüksek FINAL (semver sıralı) — hiç FINAL yoksa boş.
+  GLOBAL_HIGHEST=$(printf '%s' "$ALL_FINALS" | grep -v '^$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 || true)
+  # Base'in kendi serisindeki en yüksek FINAL patch'i (versiyon hesabı için).
+  HIGHEST_FINAL_PATCH=$(printf '%s' "$ALL_FINALS" \
+    | sed -nE "s/^$MAJOR\.$MINOR\.([0-9]+)\$/\1/p" \
+    | sort -n | tail -1 || true)
+  HIGHEST_FINAL_PATCH="${HIGHEST_FINAL_PATCH:-$PATCH}"
+  (( HIGHEST_FINAL_PATCH < PATCH )) && HIGHEST_FINAL_PATCH="$PATCH"
+
+  if [[ -n "$GLOBAL_HIGHEST" && "$GLOBAL_HIGHEST" != "$BASE_VERSION" ]] \
+     && [[ "$(printf '%s\n%s\n' "$GLOBAL_HIGHEST" "$BASE_VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "$GLOBAL_HIGHEST" ]]; then
     if [[ "$ALLOW_STALE_BASE" != "true" ]]; then
-      echo "::error::v$MAJOR.$MINOR.$HIGHEST_FINAL_PATCH-FINAL mevcutken eski base v$BASE_VERSION üzerinden hotfix onay gerektirir — workflow üzerinden çalıştırın (environment approval) veya lokalde bilinçli olarak ALLOW_STALE_BASE=true verin."
+      echo "::error::v$GLOBAL_HIGHEST-FINAL mevcutken eski base v$BASE_VERSION üzerinden hotfix onay gerektirir — workflow üzerinden çalıştırın (environment approval) veya lokalde bilinçli olarak ALLOW_STALE_BASE=true verin."
       exit 1
     fi
     STALE_BASE=true
     NEW_VERSION="$MAJOR.$MINOR.$((HIGHEST_FINAL_PATCH + 1))"
     TITLE="Cut Hotfix v$NEW_VERSION (base: v$BASE_VERSION — ESKİ BASE)"
-    APPROVAL_MESSAGE="v$MAJOR.$MINOR.$HIGHEST_FINAL_PATCH canlıda, v$BASE_VERSION üzerinden v$NEW_VERSION alınacak. Onaylıyor musunuz?"
+    APPROVAL_MESSAGE="v$GLOBAL_HIGHEST canlıda, v$BASE_VERSION üzerinden v$NEW_VERSION alınacak. Onaylıyor musunuz?"
     echo "⚠️  Eski base tespit edildi: $APPROVAL_MESSAGE"
   fi
   echo "Base: v$BASE_VERSION → Yeni hotfix versiyonu: v$NEW_VERSION"

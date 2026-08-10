@@ -31,11 +31,12 @@ Mevcut versioning/hotfix dokümanlarımızdaki kurallar birebir kod'a taşındı
 - Base versiyonun release edildiğinin kanıtı: `vX.Y.Z-FINAL` tag'i (zorunlu)
 - Base zaten hotfix'li release edilmişse zincir oradan devam eder
   (v22.0.1-FINAL varken v22.0.0'dan hotfix alınamaz)
-- **Eski base'den hotfix onayla mümkün:** serinin daha yüksek FINAL'i varken
-  eski base girilirse workflow otomatik reddetmek yerine **environment
-  approval** ister ("v22.0.2 canlıda, v22.0.1 üzerinden v22.0.3 alınacak.
-  Onaylıyor musunuz?"); onay verilirse yeni versiyon çakışmayı önlemek için
-  serinin en yüksek FINAL'inin patch+1'i olur
+- **Eski base'den hotfix onayla mümkün:** repolardaki en yüksek FINAL'den
+  daha eski bir base girilirse (aynı seri veya eski major farketmez) workflow
+  otomatik reddetmek yerine **environment approval** ister ("v22.0.2 canlıda,
+  v21.0.1 üzerinden v21.0.2 alınacak. Onaylıyor musunuz?"); onay verilirse
+  yeni versiyon base'in kendi serisinde, çakışmayı önlemek için serinin en
+  yüksek FINAL'inin patch+1'i olur
 - Web-content'te değişiklik olmasa bile 3 repoda da kesilir
 - RC tag'i cherry-pick'lerden **önce** atılır (dokümanla uyumlu)
 
@@ -61,15 +62,16 @@ summary'de repo × (SHA, branch, tag) durum tablosu ve tetikleyen kişi görün�
 
 Cut Hotfix üç job'dan oluşur: `validate` → `approve-stale-base` → `cut`.
 
-- **Güncel base** (serinin en yüksek FINAL'i): `approve-stale-base` skip
+- **Güncel base** (repolardaki en yüksek FINAL): `approve-stale-base` skip
   edilir, cut doğrudan devam eder — davranış eskisiyle aynı.
-- **Eski base** (örn. canlıda `v22.0.2` varken `22.0.1` girilirse):
-  `validate` job summary'sine onay mesajı yazar
-  (*"v22.0.2 canlıda, v22.0.1 üzerinden v22.0.3 alınacak. Onaylıyor
+- **Eski base** (örn. canlıda `v22.0.2` varken `22.0.1` veya `21.0.1`
+  girilirse): `validate` job summary'sine onay mesajı yazar
+  (*"v22.0.2 canlıda, v21.0.1 üzerinden v21.0.2 alınacak. Onaylıyor
   musunuz?"*) ve `approve-stale-base` job'ı `hotfix-approval`
   environment'ının required reviewer'ı onay verene kadar bekler.
-  - **Onay** → cut, serinin en yüksek FINAL'inin patch+1'i ile devam eder
-    (`v22.0.3` — `v22.0.2` ile çakışmaz).
+  - **Onay** → cut, base'in kendi serisinde en yüksek FINAL'in patch+1'i ile
+    devam eder (`21.0.1` → `v21.0.2`; `22.0.1` → `v22.0.3`, `v22.0.2` ile
+    çakışmaz).
   - **Red** → workflow durur, hiçbir repoya yazılmaz.
 
 Böylece yanlışlıkla eski branch üzerinden cut alınması engellenir; bilinçli
