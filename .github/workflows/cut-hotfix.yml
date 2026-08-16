@@ -22,7 +22,8 @@ concurrency:
 # Test ortamında fine-grained PAT (Contents: R/W) RELEASE_BOT_TOKEN secret'ı olarak kullanılıyor.
 
 jobs:
-  # Faz 1: her zaman dry-run validasyon. Eski base tespitinde fail etmez
+  # Faz 1: her zaman dry-run validasyon. Job summary'ye ne yapılacağı yazılır
+  # (onaylayacak kişi için özet). Eski base tespitinde fail etmez
   # (ALLOW_STALE_BASE=true), bunun yerine needs_approval output'u üretir.
   validate:
     runs-on: ubuntu-latest
@@ -57,8 +58,9 @@ jobs:
             echo "Devam etmek için **approve-stale-base** job'ını onaylayın; reddetmek için reject edin."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Faz 1.5: sadece eski base tespit edilirse çalışır — hotfix-approval
-  # environment'ının required reviewer'ı onay verene kadar bekler.
+  # Faz 1.5a: sadece eski base tespit edilirse çalışır — hotfix-approval
+  # environment'ının required reviewer'ı (ikinci göz, prevent self-review
+  # önerilir) onay verene kadar bekler.
   approve-stale-base:
     needs: validate
     if: needs.validate.outputs.needs_approval == 'true'
@@ -69,14 +71,33 @@ jobs:
         run: |
           echo "Onay alındı: ${{ needs.validate.outputs.approval_message }}"
 
-  # Faz 2: gerçek cut. Onay job'ı ya başarıyla geçmiş ya da (güncel base'de)
-  # skip edilmiş olmalı; validate her koşulda başarılı olmalı.
-  cut:
+  # Faz 1.5b: her gerçek cut için genel onay kapısı (cut-approval
+  # environment'ı). Validate'in job summary'sindeki plan incelenip onaylanır.
+  # Dry run'da onay istenmez. Eski base'de önce approve-stale-base geçilmiş
+  # olmalı.
+  approve-cut:
     needs: [validate, approve-stale-base]
+    if: >-
+      always() && !inputs.dry_run &&
+      needs.validate.result == 'success' &&
+      (needs.approve-stale-base.result == 'success' || needs.approve-stale-base.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: cut-approval
+    steps:
+      - name: Approval received
+        run: |
+          echo "Cut onaylandı: v${{ needs.validate.outputs.new_version }} (base: v${{ inputs.base_version }})"
+
+  # Faz 2: gerçek cut. Dry run'da onay job'ları skip edilir ve doğrudan
+  # çalışır; gerçek run'da approve-cut (ve eski base'de approve-stale-base)
+  # başarıyla geçilmiş olmalı.
+  cut:
+    needs: [validate, approve-stale-base, approve-cut]
     if: >-
       always() &&
       needs.validate.result == 'success' &&
-      (needs.approve-stale-base.result == 'success' || needs.approve-stale-base.result == 'skipped')
+      (needs.approve-stale-base.result == 'success' || needs.approve-stale-base.result == 'skipped') &&
+      (needs.approve-cut.result == 'success' || (needs.approve-cut.result == 'skipped' && inputs.dry_run))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -62,33 +62,45 @@ Actions sekmesi → workflow seç → **Run workflow**:
 ne yapılacağı raporlanır, hiçbir şey pushlanmaz. Her run sonunda job
 summary'de repo × (SHA, branch, tag) durum tablosu ve tetikleyen kişi görünür.
 
-### Hotfix'te eski base onay akışı
+### Onay akışı (environment approval)
 
-Cut Hotfix üç job'dan oluşur: `validate` → `approve-stale-base` → `cut`.
+Her iki workflow da `validate → onay → cut` desenindedir ve **iki ayrı onay
+kapısı** vardır:
+
+**1. `cut-approval` (genel kapı):** her *gerçek* cut'tan önce çalışır.
+`validate` job'ı dry-run yapıp job summary'ye planı yazar (kaynak SHA'lar,
+oluşturulacak branch/tag tablosu); `approve-cut` job'ı bu plan incelenip
+onaylanana kadar bekler. `dry_run: true`'da onay istenmez — prova
+sürtünmesizdir.
+
+**2. `hotfix-approval` (riskli kapı — sadece Cut Hotfix):** eski base
+tespitinde genel kapıdan *önce* devreye girer:
 
 - **Güncel base** (serinin en yeni kesimi, üst seride FINAL yok):
-  `approve-stale-base` skip edilir, cut doğrudan devam eder — davranış
-  eskisiyle aynı.
+  `approve-stale-base` skip edilir, sadece genel `cut-approval` onayı
+  gerekir.
 - **Eski base** (örn. `v23.0.2` kesilmişken `23.0.1` girilirse):
   `validate` job summary'sine onay mesajı yazar
   (*"v23.0.2 canlıda, v23.0.1 üzerinden v23.0.3 alınacak. Onaylıyor
   musunuz?"* — referansın FINAL'i yoksa "canlıda" yerine *"kesilmiş (RC,
   henüz release edilmedi)"* ifadesi kullanılır) ve `approve-stale-base`
-  job'ı `hotfix-approval`
-  environment'ının required reviewer'ı onay verene kadar bekler.
-  - **Onay** → cut, base serisinin en yüksek kesiminin patch+1'i ile devam
-    eder (`23.0.1` → `v23.0.3`, mevcut `v23.0.2` ile çakışmaz).
+  job'ı `hotfix-approval` environment'ının required reviewer'ı onay verene
+  kadar bekler.
+  - **Onay** → sıra genel `cut-approval` kapısına geçer; o da onaylanırsa
+    cut, base serisinin en yüksek kesiminin patch+1'i ile devam eder
+    (`23.0.1` → `v23.0.3`, mevcut `v23.0.2` ile çakışmaz).
   - **Red** → workflow durur, hiçbir repoya yazılmaz.
 
-Böylece yanlışlıkla eski branch üzerinden cut alınması engellenir; bilinçli
-(müşteri-özel) durumlarda ise ikinci bir göz onayıyla yol açılır.
+İki kapının ayrı olması policy ayrımına izin verir: rutin `cut-approval`'da
+self-review serbest bırakılabilirken, riskli `hotfix-approval`'da ikinci göz
+(prevent self-review açık) şart koşulabilir.
 
 ### Yapı
 
 ```
 .github/workflows/
-├── cut-release.yml   # ince katman: input + concurrency → scripts/cut.sh
-└── cut-hotfix.yml    # validate → (eski base ise approval) → cut → scripts/cut.sh
+├── cut-release.yml   # validate → approve-cut → cut → scripts/cut.sh
+└── cut-hotfix.yml    # validate → (eski base ise approve-stale-base) → approve-cut → cut
 scripts/
 └── cut.sh            # tüm cut mantığı (MODE=release|hotfix) — tek kaynak
 ```
@@ -169,14 +181,17 @@ MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cu
 4. **FINAL backfill:** release edilmiş ama FINAL tag'i eksik geçmiş
    versiyonlar taranıp elle FINAL atılmalı (örn. v6.9.7, v6.9.9) — aksi halde
    bu versiyonlara hotfix gerektiğinde guard yanlış alarm verir.
-5. **`hotfix-approval` environment'ı:** orchestration reposunda
-   Settings → Environments → New environment → `hotfix-approval`.
-   - **Required reviewers:** eski base'den cut'ı onaylayabilecek kişiler
-     (örn. release sorumluları) eklenir — en az 1 kişi zorunlu, yoksa
-     approval job'ı beklemeden geçer.
-   - **Prevent self-review:** cut'ı tetikleyen kişinin kendi isteğini
-     onaylayamaması isteniyorsa **açık** olmalı (önerilen); tek kişilik
-     ekipte/testte kapalı bırakılabilir.
+5. **Onay environment'ları:** orchestration reposunda Settings →
+   Environments altında iki environment oluşturulur:
+   - **`cut-approval` (genel kapı):** her gerçek cut'ın onayı.
+     - *Required reviewers:* cut alabilecek herkes (geniş liste) — en az
+       1 kişi zorunlu, yoksa approval job'ı beklemeden geçer.
+     - *Prevent self-review:* **kapalı** — cut'ı alan kişi validate
+       özetini inceleyip kendisi onaylayabilir.
+   - **`hotfix-approval` (riskli kapı):** eski base'den hotfix onayı.
+     - *Required reviewers:* release sorumluları (dar liste).
+     - *Prevent self-review:* **açık** (önerilen) — riskli cut ikinci göz
+       gerektirir; tek kişilik ekipte/testte kapalı bırakılabilir.
 6. Workflow'lardaki `OWNER` / `REPOS` değerleri gerçek repolarla güncellenir.
 
 ---
@@ -216,9 +231,9 @@ Geçen senaryolar (17):
 4. **Jira entegrasyonu:** "Assistbox Mobile Release vX.Y.Z" task'ının
    otomatik oluşturulması (team/label/assignee).
 5. **Slack bildirimi:** cut sonucu özeti.
-6. **Onay katmanı (opsiyonel):** eski base hotfix'i için environment
-   approval **eklendi** (`hotfix-approval`); istenirse aynı desen tüm
-   execute fazlarına genişletilebilir.
+6. **Onay katmanı:** ✅ **tamamlandı** — genel `cut-approval` kapısı tüm
+   gerçek cut'ların execute fazını, `hotfix-approval` kapısı eski base
+   hotfix'lerini korur (bkz. Kullanım → Onay akışı).
 
 ---
 
