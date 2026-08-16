@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Cut alma sürecinin ortak mantığı.
 # Kullanım (env üzerinden):
-#   MODE=release VERSION=23.0.0        [DRY_RUN=true] ./cut.sh
-#   MODE=hotfix  BASE_VERSION=22.0.0   [DRY_RUN=true] ./cut.sh
+#   MODE=release VERSION=23.0.0        [DRY_RUN=true] ./test-cut.sh
+#   MODE=hotfix  BASE_VERSION=22.0.0   [DRY_RUN=true] ./test-cut.sh
 # Gerekli env: OWNER, REPOS (boşlukla ayrılmış), GH_TOKEN
 # GITHUB_STEP_SUMMARY tanımlıysa özet tablo oraya yazılır.
 set -euo pipefail

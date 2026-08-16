@@ -18,15 +18,9 @@ concurrency:
   group: cut-release-${{ inputs.version }}
   cancel-in-progress: false
 
-# Gerçek ortamda GitHub App token'ı önerilir:
-# - uses: actions/create-github-app-token@v1
-#   id: app-token
-#   with:
-#     app-id: ${{ secrets.APP_ID }}
-#     private-key: ${{ secrets.APP_PRIVATE_KEY }}
-#     owner: Assistbox
-#     repositories: assistbox-ios,assistbox-android,assistbox-mobile-web-content
-# Test ortamında fine-grained PAT (Contents: R/W) RELEASE_BOT_TOKEN secret'ı olarak kullanılıyor.
+# Auth: GitHub App (Contents: R/W, sadece hedef repolara install).
+# Her token kullanan job kendi kısa ömürlü App token'ını üretir
+# (vars.APP_CLIENT_ID + secrets.APP_PRIVATE_KEY).
 
 jobs:
   # Faz 1: her zaman dry-run validasyon. Job summary'ye ne yapılacağı yazılır
@@ -36,16 +30,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: yusufbingol
+          repositories: |
+            git_deneme
+            git_deneme_2
+            git_deneme_3
+
       - name: Validate (dry run)
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OWNER: yusufbingol
           # Gerçek ortamda: assistbox-ios assistbox-android assistbox-mobile-web-content
           REPOS: git_deneme git_deneme_2 git_deneme_3
           MODE: release
           VERSION: ${{ inputs.version }}
           DRY_RUN: "true"
-        run: ./scripts/cut.sh
+        run: ./scripts/test-cut.sh
 
       - name: Show approval request
         if: ${{ !inputs.dry_run }}
@@ -84,13 +89,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: yusufbingol
+          repositories: |
+            git_deneme
+            git_deneme_2
+            git_deneme_3
+
       - name: Cut release
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OWNER: yusufbingol
           # Gerçek ortamda: assistbox-ios assistbox-android assistbox-mobile-web-content
           REPOS: git_deneme git_deneme_2 git_deneme_3
           MODE: release
           VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
-        run: ./scripts/cut.sh
+        run: ./scripts/test-cut.sh

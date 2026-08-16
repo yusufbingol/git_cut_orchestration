@@ -102,21 +102,21 @@ kapalı) — cut'ı alan kişi validate özetini inceleyip kendisi onaylayabilir
 
 ```
 .github/workflows/
-├── cut-release.yml   # validate → approve-cut → cut → scripts/cut.sh
-└── cut-hotfix.yml    # validate → (eski base ise approve-stale-base) → approve-cut → cut
+├── test-cut-release.yml   # validate → approve-cut → cut → scripts/test-cut.sh
+└── test-cut-hotfix.yml    # validate → (eski base ise approve-stale-base) → approve-cut → cut
 scripts/
-└── cut.sh            # tüm cut mantığı (MODE=release|hotfix) — tek kaynak
+└── test-cut.sh            # tüm cut mantığı (MODE=release|hotfix) — tek kaynak
 ```
 
-Mantığın tamamı `scripts/cut.sh`'ta: iki workflow arasında kopya kod yok,
+Mantığın tamamı `scripts/test-cut.sh`'ta: iki workflow arasında kopya kod yok,
 script lokalde de çalıştırılıp test edilebilir (shellcheck temiz):
 
 ```bash
 export GH_TOKEN=... OWNER=yusufbingol REPOS="git_deneme git_deneme_2 git_deneme_3"
-MODE=release VERSION=24.0.0 DRY_RUN=true ./scripts/cut.sh
-MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/cut.sh
+MODE=release VERSION=24.0.0 DRY_RUN=true ./scripts/test-cut.sh
+MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/test-cut.sh
 # Eski base'den bilinçli cut (workflow'da bunun yerine environment approval var):
-MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cut.sh
+MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/test-cut.sh
 ```
 
 ---
@@ -194,12 +194,12 @@ MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cu
 
 ## 5. Kurulum (gerçek ortama geçiş)
 
-1. **Orchestration reposu:** bu yapı `assistbox-mobile-release` gibi bir repoya taşınır.
-2. **GitHub App** (`assistbox-release-bot`): izin `Contents: Read & Write`,
-   sadece 3 repo + orchestration reposuna install. `APP_ID` /
-   `APP_PRIVATE_KEY` secret'ları eklenir, workflow'lardaki
-   `create-github-app-token` adımı açılır.
-   *(Test ortamında fine-grained PAT `RELEASE_BOT_TOKEN` kullanılıyor.)*
+1. **Orchestration reposu:** bu yapı `assistbox-mobile-tools` reposuna taşınır.
+2. **GitHub App:** izin `Contents: Read & Write`, sadece 3 mobil repoya
+   install. `APP_CLIENT_ID` repo variable'ı ve `APP_PRIVATE_KEY` secret'ı
+   tanımlanır; workflow'lar her token kullanan job'da
+   `actions/create-github-app-token` ile kısa ömürlü token üretir.
+   *(Test ortamında da aynı yapı kullanılıyor — PAT kullanımı kaldırıldı.)*
 3. **Ruleset bypass:** repolarda `v*` tag/branch protection ruleset'i varsa
    GitHub App bypass listesine eklenmeli — yoksa cut push'ları reddedilir.
 4. **FINAL backfill:** release edilmiş ama FINAL tag'i eksik geçmiş
@@ -219,7 +219,7 @@ MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cu
 
 ## 6. Test Durumu
 
-`scripts/cut.sh` lokalde gerçek GitHub API ile uçtan uca test edildi
+`scripts/test-cut.sh` lokalde gerçek GitHub API ile uçtan uca test edildi
 (2026-08-05). Dummy repolarda test artefaktı olarak `v23.0.0` / `v23.0.1`
 branch'leri + RC/FINAL tag'leri duruyor (hepsi annotated).
 
