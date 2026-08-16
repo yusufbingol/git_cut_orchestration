@@ -128,14 +128,21 @@ if [[ "$MODE" == "hotfix" ]]; then
 
   if [[ -n "$REFERENCE" && "$REFERENCE" != "$BASE_VERSION" ]] \
      && [[ "$(printf '%s\n%s\n' "$REFERENCE" "$BASE_VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "$REFERENCE" ]]; then
+    # Referansın durumu: FINAL'i varsa release edilmiş ("canlıda"),
+    # sadece RC'liyse kesilmiş ama henüz release edilmemiş.
+    if printf '%s' "$ALL_FINALS" | grep -qx "$REFERENCE"; then
+      REF_DESC="v$REFERENCE canlıda"
+    else
+      REF_DESC="v$REFERENCE kesilmiş (RC, henüz release edilmedi)"
+    fi
     if [[ "$ALLOW_STALE_BASE" != "true" ]]; then
-      echo "::error::v$REFERENCE mevcutken eski base v$BASE_VERSION üzerinden hotfix onay gerektirir — workflow üzerinden çalıştırın (environment approval) veya lokalde bilinçli olarak ALLOW_STALE_BASE=true verin."
+      echo "::error::$REF_DESC iken eski base v$BASE_VERSION üzerinden hotfix onay gerektirir — workflow üzerinden çalıştırın (environment approval) veya lokalde bilinçli olarak ALLOW_STALE_BASE=true verin."
       exit 1
     fi
     STALE_BASE=true
     NEW_VERSION="$MAJOR.$MINOR.$((HIGHEST_CUT_PATCH + 1))"
     TITLE="Cut Hotfix v$NEW_VERSION (base: v$BASE_VERSION — ESKİ BASE)"
-    APPROVAL_MESSAGE="v$REFERENCE canlıda, v$BASE_VERSION üzerinden v$NEW_VERSION alınacak. Onaylıyor musunuz?"
+    APPROVAL_MESSAGE="$REF_DESC, v$BASE_VERSION üzerinden v$NEW_VERSION alınacak. Onaylıyor musunuz?"
     echo "⚠️  Eski base tespit edildi: $APPROVAL_MESSAGE"
   fi
   echo "Base: v$BASE_VERSION → Yeni hotfix versiyonu: v$NEW_VERSION"

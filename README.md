@@ -35,7 +35,9 @@ Mevcut versioning/hotfix dokümanlarımızdaki kurallar birebir kod'a taşındı
   bir kesim (RC/FINAL) varsa **veya** daha yüksek bir seride release edilmiş
   (FINAL) versiyon varsa workflow otomatik reddetmek yerine **environment
   approval** ister ("v23.0.2 canlıda, v23.0.1 üzerinden v23.0.3 alınacak.
-  Onaylıyor musunuz?"); onay verilirse yeni versiyon base'in kendi serisinde,
+  Onaylıyor musunuz?" — referans release edilmemişse "canlıda" yerine
+  "kesilmiş (RC, henüz release edilmedi)" denir); onay verilirse yeni
+  versiyon base'in kendi serisinde,
   çakışmayı önlemek için serinin en yüksek kesiminin patch+1'i olur.
   (Üst seride *sadece RC* olması eski base sayılmaz — yeni major kesilmişken
   önceki serinin hotfix'i normal akıştır.)
@@ -70,7 +72,9 @@ Cut Hotfix üç job'dan oluşur: `validate` → `approve-stale-base` → `cut`.
 - **Eski base** (örn. `v23.0.2` kesilmişken `23.0.1` girilirse):
   `validate` job summary'sine onay mesajı yazar
   (*"v23.0.2 canlıda, v23.0.1 üzerinden v23.0.3 alınacak. Onaylıyor
-  musunuz?"*) ve `approve-stale-base` job'ı `hotfix-approval`
+  musunuz?"* — referansın FINAL'i yoksa "canlıda" yerine *"kesilmiş (RC,
+  henüz release edilmedi)"* ifadesi kullanılır) ve `approve-stale-base`
+  job'ı `hotfix-approval`
   environment'ının required reviewer'ı onay verene kadar bekler.
   - **Onay** → cut, base serisinin en yüksek kesiminin patch+1'i ile devam
     eder (`23.0.1` → `v23.0.3`, mevcut `v23.0.2` ile çakışmaz).
