@@ -1,4 +1,4 @@
-name: Cut Release
+name: Test Cut Release
 
 on:
   workflow_dispatch:

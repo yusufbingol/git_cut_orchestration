@@ -1,0 +1,110 @@
+name: Cut Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version (X.0.0 format, without 'v' — e.g. 23.0.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (validation only, no pushes)"
+        required: false
+        type: boolean
+        default: false
+
+# Serializes parallel duplicate triggers for the same version.
+concurrency:
+  group: cut-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+# Auth: GitHub App (Contents: R/W, installed only on the target repos).
+# Each token-using job creates its own short-lived App token
+# (vars.APP_CLIENT_ID + secrets.APP_PRIVATE_KEY).
+
+jobs:
+  # Phase 1: always a dry-run validation. The plan is written to the job
+  # summary (for the approver: source SHAs + branch/tag to be created).
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: assistbox
+          repositories: |
+            assistbox-android
+            assistbox-ios
+            assistbox-mobile-web-content
+
+      - name: Validate (dry run)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OWNER: assistbox
+          REPOS: assistbox-android assistbox-ios assistbox-mobile-web-content
+          MODE: release
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: "true"
+        run: ./scripts/cut.sh
+
+      - name: Show approval request
+        if: ${{ !inputs.dry_run }}
+        run: |
+          {
+            echo "## 🔔 Approval Required — Cut Release v${{ inputs.version }}"
+            echo ""
+            echo "Branch \`v${{ inputs.version }}\` + tag \`v${{ inputs.version }}-RC\` will be created from \`main\` HEAD in 3 repos."
+            echo "The planned operations are in the table above (source SHA + branch/tag status)."
+            echo ""
+            echo "Approve the **approve-cut** job to continue; reject it to stop."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Phase 1.5: general approval gate for every real cut (cut-approval
+  # environment). The plan in validate's job summary is reviewed and
+  # approved. No approval is requested for dry runs.
+  approve-cut:
+    needs: validate
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: cut-approval
+    steps:
+      - name: Approval received
+        run: |
+          echo "Cut approved: v${{ inputs.version }}"
+
+  # Phase 2: the real cut. On dry runs the approval job is skipped and this
+  # runs directly; on real runs approve-cut must have succeeded.
+  cut:
+    needs: [validate, approve-cut]
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      (needs.approve-cut.result == 'success' || (needs.approve-cut.result == 'skipped' && inputs.dry_run))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: assistbox
+          repositories: |
+            assistbox-android
+            assistbox-ios
+            assistbox-mobile-web-content
+
+      - name: Cut release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OWNER: assistbox
+          REPOS: assistbox-android assistbox-ios assistbox-mobile-web-content
+          MODE: release
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: ./scripts/cut.sh

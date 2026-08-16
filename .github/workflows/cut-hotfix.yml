@@ -1,31 +1,31 @@
-name: Test Cut Hotfix
+name: Cut Hotfix
 
 on:
   workflow_dispatch:
     inputs:
       base_version:
-        description: "Üzerinden cut alınacak release edilmiş versiyon (v'siz — örn. 22.0.0)"
+        description: "Released version to cut from (without 'v' — e.g. 22.0.0)"
         required: true
         type: string
       dry_run:
-        description: "Dry run (sadece validasyon, push yok)"
+        description: "Dry run (validation only, no pushes)"
         required: false
         type: boolean
         default: false
 
-# Aynı base için paralel çift tetiklemeyi serileştirir.
+# Serializes parallel duplicate triggers for the same base.
 concurrency:
   group: cut-hotfix-${{ inputs.base_version }}
   cancel-in-progress: false
 
-# Auth: GitHub App (Contents: R/W, sadece hedef repolara install).
-# Her token kullanan job kendi kısa ömürlü App token'ını üretir
+# Auth: GitHub App (Contents: R/W, installed only on the target repos).
+# Each token-using job creates its own short-lived App token
 # (vars.APP_CLIENT_ID + secrets.APP_PRIVATE_KEY).
 
 jobs:
-  # Faz 1: her zaman dry-run validasyon. Job summary'ye ne yapılacağı yazılır
-  # (onaylayacak kişi için özet). Eski base tespitinde fail etmez
-  # (ALLOW_STALE_BASE=true), bunun yerine needs_approval output'u üretir.
+  # Phase 1: always a dry-run validation. The plan is written to the job
+  # summary (for the approver). Does not fail on stale-base detection
+  # (ALLOW_STALE_BASE=true); it produces the needs_approval output instead.
   validate:
     runs-on: ubuntu-latest
     outputs:
@@ -33,58 +33,56 @@ jobs:
       new_version: ${{ steps.validate.outputs.new_version }}
       approval_message: ${{ steps.validate.outputs.approval_message }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: yusufbingol
+          owner: assistbox
           repositories: |
-            git_deneme
-            git_deneme_2
-            git_deneme_3
+            assistbox-android
+            assistbox-ios
+            assistbox-mobile-web-content
 
       - name: Validate (dry run)
         id: validate
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          OWNER: yusufbingol
-          # Gerçek ortamda: assistbox-ios assistbox-android assistbox-mobile-web-content
-          REPOS: git_deneme git_deneme_2 git_deneme_3
+          OWNER: assistbox
+          REPOS: assistbox-android assistbox-ios assistbox-mobile-web-content
           MODE: hotfix
           BASE_VERSION: ${{ inputs.base_version }}
           DRY_RUN: "true"
           ALLOW_STALE_BASE: "true"
-        run: ./scripts/test-cut.sh
+        run: ./scripts/cut.sh
 
       - name: Show approval request (stale base)
         if: steps.validate.outputs.needs_approval == 'true'
         run: |
           {
-            echo "## ⚠️ Onay Gerekli — Eski Base'den Hotfix"
+            echo "## ⚠️ Approval Required — Hotfix from a Stale Base"
             echo ""
             echo "> ${{ steps.validate.outputs.approval_message }}"
             echo ""
-            echo "Devam etmek için **approve-stale-base** job'ını onaylayın; reddetmek için reject edin."
+            echo "Approve the **approve-stale-base** job to continue; reject it to stop."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Show approval request (cut)
         if: ${{ !inputs.dry_run }}
         run: |
           {
-            echo "## 🔔 Onay Gerekli — Cut Hotfix v${{ steps.validate.outputs.new_version }}"
+            echo "## 🔔 Approval Required — Cut Hotfix v${{ steps.validate.outputs.new_version }}"
             echo ""
-            echo "3 repoda \`v${{ inputs.base_version }}\` HEAD'inden \`v${{ steps.validate.outputs.new_version }}\` branch'i + \`v${{ steps.validate.outputs.new_version }}-RC\` tag'i oluşturulacak."
-            echo "Planlanan işlemler yukarıdaki tabloda (kaynak SHA + branch/tag durumu)."
+            echo "Branch \`v${{ steps.validate.outputs.new_version }}\` + tag \`v${{ steps.validate.outputs.new_version }}-RC\` will be created from \`v${{ inputs.base_version }}\` HEAD in 3 repos."
+            echo "The planned operations are in the table above (source SHA + branch/tag status)."
             echo ""
-            echo "Devam etmek için **approve-cut** job'ını onaylayın; reddetmek için reject edin."
+            echo "Approve the **approve-cut** job to continue; reject it to stop."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Faz 1.5a: sadece eski base tespit edilirse çalışır — hotfix-approval
-  # environment'ının required reviewer'ı (ikinci göz, prevent self-review
-  # önerilir) onay verene kadar bekler.
+  # Phase 1.5a: runs only when a stale base is detected — waits until a
+  # required reviewer of the hotfix-approval environment approves.
   approve-stale-base:
     needs: validate
     if: needs.validate.outputs.needs_approval == 'true'
@@ -93,12 +91,12 @@ jobs:
     steps:
       - name: Approval received
         run: |
-          echo "Onay alındı: ${{ needs.validate.outputs.approval_message }}"
+          echo "Approval received: ${{ needs.validate.outputs.approval_message }}"
 
-  # Faz 1.5b: her gerçek cut için genel onay kapısı (cut-approval
-  # environment'ı). Validate'in job summary'sindeki plan incelenip onaylanır.
-  # Dry run'da onay istenmez. Eski base'de önce approve-stale-base geçilmiş
-  # olmalı.
+  # Phase 1.5b: general approval gate for every real cut (cut-approval
+  # environment). The plan in validate's job summary is reviewed and
+  # approved. No approval is requested for dry runs. On a stale base,
+  # approve-stale-base must have passed first.
   approve-cut:
     needs: [validate, approve-stale-base]
     if: >-
@@ -110,11 +108,11 @@ jobs:
     steps:
       - name: Approval received
         run: |
-          echo "Cut onaylandı: v${{ needs.validate.outputs.new_version }} (base: v${{ inputs.base_version }})"
+          echo "Cut approved: v${{ needs.validate.outputs.new_version }} (base: v${{ inputs.base_version }})"
 
-  # Faz 2: gerçek cut. Dry run'da onay job'ları skip edilir ve doğrudan
-  # çalışır; gerçek run'da approve-cut (ve eski base'de approve-stale-base)
-  # başarıyla geçilmiş olmalı.
+  # Phase 2: the real cut. On dry runs the approval jobs are skipped and this
+  # runs directly; on real runs approve-cut (and, on a stale base,
+  # approve-stale-base) must have succeeded.
   cut:
     needs: [validate, approve-stale-base, approve-cut]
     if: >-
@@ -124,28 +122,27 @@ jobs:
       (needs.approve-cut.result == 'success' || (needs.approve-cut.result == 'skipped' && inputs.dry_run))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: yusufbingol
+          owner: assistbox
           repositories: |
-            git_deneme
-            git_deneme_2
-            git_deneme_3
+            assistbox-android
+            assistbox-ios
+            assistbox-mobile-web-content
 
       - name: Cut hotfix
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          OWNER: yusufbingol
-          # Gerçek ortamda: assistbox-ios assistbox-android assistbox-mobile-web-content
-          REPOS: git_deneme git_deneme_2 git_deneme_3
+          OWNER: assistbox
+          REPOS: assistbox-android assistbox-ios assistbox-mobile-web-content
           MODE: hotfix
           BASE_VERSION: ${{ inputs.base_version }}
           DRY_RUN: ${{ inputs.dry_run }}
-          # Eski base ise buraya sadece approval'dan geçilerek ulaşılır.
+          # On a stale base this point is only reachable via the approval.
           ALLOW_STALE_BASE: ${{ needs.validate.outputs.needs_approval }}
-        run: ./scripts/test-cut.sh
+        run: ./scripts/cut.sh
