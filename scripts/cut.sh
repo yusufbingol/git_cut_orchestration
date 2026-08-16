@@ -98,6 +98,27 @@ ERRORS=()
 read -r -a REPO_LIST <<< "$REPOS"
 SRC_SHA=(); SKIP_BRANCH=(); SKIP_TAG=()
 
+# ---------- Faz 0.5 (release): önceki major'ın release kontrolü ----------
+# Normal akış: yeni major, en yüksek FINAL major'ının +1'idir. Önceki major
+# kesilmiş ama release edilmemişse (RC var, FINAL yok) cut engellenmez ama
+# onaycıya gösterilmek üzere uyarı üretilir (release_warning output'u).
+RELEASE_WARNING=""
+if [[ "$MODE" == "release" ]]; then
+  FINAL_MAJORS=""
+  for repo in "${REPO_LIST[@]}"; do
+    FINAL_MAJORS+=$(list_tags "$repo" \
+      | sed -nE 's/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-FINAL$/\1/p')$'\n'
+  done
+  PREV_MAJOR=$((NEW_MAJOR - 1))
+  if (( PREV_MAJOR >= 1 )) && ! printf '%s' "$FINAL_MAJORS" | grep -qx "$PREV_MAJOR"; then
+    RELEASE_WARNING="⚠️ v$PREV_MAJOR serisi henüz release edilmemiş görünüyor (v$PREV_MAJOR.x.x-FINAL tag'i yok) — normal akışta yeni cut, en son release edilmiş major'ın +1'idir."
+    echo "$RELEASE_WARNING"
+  fi
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "release_warning=$RELEASE_WARNING" >> "$GITHUB_OUTPUT"
+  fi
+fi
+
 # ---------- Faz 0.5 (hotfix): eski base tespiti ----------
 # "Eski base" iki durumda oluşur:
 #   a) Base'in KENDİ serisinde daha yeni bir kesim (RC veya FINAL) var
@@ -115,8 +136,10 @@ if [[ "$MODE" == "hotfix" ]]; then
   ALL_FINALS=""; SERIES_CUTS=""
   for repo in "${REPO_LIST[@]}"; do
     tags=$(list_tags "$repo" || true)
-    ALL_FINALS+=$(printf '%s' "$tags" | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)-FINAL$/\1/p')$'\n'
-    SERIES_CUTS+=$(printf '%s' "$tags" | sed -nE "s/^v$MAJOR\.$MINOR\.([0-9]+)-(RC|FINAL)\$/\1/p")$'\n'
+    # Not: sadece düzgün formatlı sayılar eşleşir (sıfır önekli, örn. "08",
+    # tag'ler yok sayılır — bash aritmetiğinde octal hatasına yol açardı).
+    ALL_FINALS+=$(printf '%s' "$tags" | sed -nE 's/^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-FINAL$/\1/p')$'\n'
+    SERIES_CUTS+=$(printf '%s' "$tags" | sed -nE "s/^v$MAJOR\.$MINOR\.(0|[1-9][0-9]*)-(RC|FINAL)\$/\1/p")$'\n'
   done
   # Base serisindeki en yüksek kesilmiş patch (RC veya FINAL).
   HIGHEST_CUT_PATCH=$(printf '%s' "$SERIES_CUTS" | grep -v '^$' | sort -n | tail -1 || true)
@@ -176,9 +199,9 @@ for i in "${!REPO_LIST[@]}"; do
 
     # Major guard'ı (typo koruması): sadece en yüksek RC major'ın kendisi
     # (idempotent re-run) veya +1'i (yeni cut) kabul edilir. Hiç RC yoksa
-    # ilk cut serbest.
+    # ilk cut serbest. (Sıfır önekli bozuk tag'ler yok sayılır — octal riski.)
     highest_major=$(list_tags "$repo" \
-      | sed -nE 's/^v([0-9]+)\.[0-9]+\.[0-9]+-RC$/\1/p' \
+      | sed -nE 's/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-RC$/\1/p' \
       | sort -n | tail -1 || true)
     if [[ -n "$highest_major" ]]; then
       if [[ "$NEW_MAJOR" -gt $((highest_major + 1)) ]]; then

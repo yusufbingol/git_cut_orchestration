@@ -33,10 +33,13 @@ jobs:
   # (onaylayacak kişi için özet: kaynak SHA'lar + oluşturulacak branch/tag).
   validate:
     runs-on: ubuntu-latest
+    outputs:
+      release_warning: ${{ steps.validate.outputs.release_warning }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Validate (dry run)
+        id: validate
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
           OWNER: yusufbingol
@@ -53,6 +56,10 @@ jobs:
           {
             echo "## 🔔 Onay Gerekli — Cut Release v${{ inputs.version }}"
             echo ""
+            if [ -n "${{ steps.validate.outputs.release_warning }}" ]; then
+              echo "> ${{ steps.validate.outputs.release_warning }}"
+              echo ""
+            fi
             echo "3 repoda \`main\` HEAD'inden \`v${{ inputs.version }}\` branch'i + \`v${{ inputs.version }}-RC\` tag'i oluşturulacak."
             echo "Planlanan işlemler yukarıdaki tabloda (kaynak SHA + branch/tag durumu)."
             echo ""

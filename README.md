@@ -22,7 +22,10 @@ Mevcut versioning/hotfix dokümanlarımızdaki kurallar birebir kod'a taşındı
 **Normal cut (sprint sonu, `vX.0.0`):**
 - `main` HEAD'inden `vX.0.0` branch'i oluşturulur — 3 repoda birden
 - Branch'in oluşturulduğu commit'e `vX.0.0-RC` tag'i atılır (annotated)
-- Versiyon, mevcut en yüksek versiyonun major+1'i olmalıdır
+- Normal akışta versiyon, **en son release edilmiş (FINAL'li) major'ın
+  +1'idir**; önceki major release edilmemişse cut engellenmez ama onay
+  özetinde uyarı gösterilir. Typo koruması: en fazla en yüksek kesilmiş
+  major'ın +1'i girilebilir.
 
 **Hotfix cut (`vX.Y.Z+1`):**
 - Asla `main`'den alınmaz — release edilmiş `vX.Y.Z` branch'inden alınır
@@ -91,9 +94,10 @@ tespitinde genel kapıdan *önce* devreye girer:
     (`23.0.1` → `v23.0.3`, mevcut `v23.0.2` ile çakışmaz).
   - **Red** → workflow durur, hiçbir repoya yazılmaz.
 
-İki kapının ayrı olması policy ayrımına izin verir: rutin `cut-approval`'da
-self-review serbest bırakılabilirken, riskli `hotfix-approval`'da ikinci göz
-(prevent self-review açık) şart koşulabilir.
+İki kapının ayrı olması, gerekirse ileride farklı reviewer/policy atanmasına
+izin verir. Mevcut policy: her iki kapıda da **dar reviewer listesi**
+(release sorumluları) ve **self-review serbest** (prevent self-review
+kapalı) — cut'ı alan kişi validate özetini inceleyip kendisi onaylayabilir.
 
 ### Yapı
 
@@ -118,41 +122,63 @@ MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cu
 
 ---
 
-## 3. Handle Edilen Hatalar ve Guard'lar
+## 3. Kural Tablosu (konsolide)
 
-### Girdi hataları
+### Ortak — girdi/format kuralları
 
-| Hatalı giriş | Davranış |
+| Kural | Davranış |
 |---|---|
-| `23.1.0`, `23.0.1` (normal cut'ta) | Reddedilir — normal cut sadece `X.0.0` |
-| `v23.0.0`, `abc`, `23.0`, boş | Format regex'i reddeder |
-| `023.0.0`, `23.0.01` (başında sıfır) | Reddedilir (isim kirliliği/octal riski) |
-| `99.0.0` (ileri sıçrama) | Reddedilir — en fazla mevcut en yüksek major+1 |
-| `5.0.0` (geriye dönük, en son v23 iken) | Reddedilir — "yeni cut için v24.0.0 kullanın" |
-| Aynı versiyonu tekrar girmek (main değişmemiş) | Zararsız — idempotent skip |
-| Aynı versiyonu tekrar girmek (main ilerlemiş) | Reddedilir + "bir sonraki versiyonu girin" ipucu |
+| Format `X.Y.Z`, `v`'siz, başında sıfırsız | Aksi halde red (`v23.0.0`, `abc`, `23.0`, `023.0.0`, boş → red) |
+| Release'de sadece `X.0.0` | `23.1.0`, `23.0.1` girilirse red (minor/patch cut kapsam dışı) |
+| İki fazlı validate→execute | Önce 3 repoda **tüm** validasyonlar (yazma yok); tek ihlal → hiçbir repoya dokunulmaz |
+| `dry_run: true` | Sadece validasyon + plan raporu, push yok, **onay istenmez** |
+| Bozuk tag'ler (sıfır önekli, örn. `v23.0.08-FINAL`) | Yok sayılır — versiyon hesaplarına girmez (octal koruması) |
 
-### Süreç guard'ları (hotfix)
+### Cut Release — akış: `validate → approve-cut → cut`
 
 | Durum | Davranış |
 |---|---|
-| Base branch mevcut değil | Reddedilir |
-| Base'in `-FINAL` tag'i yok (release edilmemiş) | Reddedilir (hard-fail) |
-| FINAL'den sonra base branch'e commit pushlanmış | Reddedilir (hard-fail) — hotfix release edilmemiş kod içeremez |
-| Base'den daha yeni kesim/FINAL varken eski base | **Environment approval** istenir — onaylanırsa serinin en yüksek kesiminin patch+1'i ile devam, reddedilirse durur |
-| Yeni branch/tag başka SHA'da zaten var | Reddedilir — elle inceleme istenir |
+| Girilen major = en yüksek **FINAL** major + 1 | ✅ Normal cut (`main` HEAD'inden branch + RC tag) |
+| Önceki major kesilmiş ama release edilmemiş (RC var, FINAL yok) | ✅ Devam eder, ama onay özetinde ⚠️ uyarı gösterilir |
+| Girilen major > en yüksek kesilmiş major + 1 (örn. `99.0.0`) | ❌ Red — typo koruması |
+| Girilen major < en yüksek kesilmiş major (geriye dönük) | ❌ Red — "yeni cut için v(en yüksek+1).0.0 kullanın" |
+| Aynı versiyon tekrar, `main` değişmemiş | ⏭️ İdempotent skip (zararsız re-run) |
+| Aynı versiyon tekrar, `main` ilerlemiş | ❌ Red — "bir sonraki versiyonu girin" |
+| Hiç RC yoksa (ilk cut) | ✅ Serbest |
+| Gerçek run | 🔔 **`cut-approval`** onayı gerekir (validate özetiyle) |
+
+### Cut Hotfix — akış: `validate → [approve-stale-base] → approve-cut → cut`
+
+| Durum | Davranış |
+|---|---|
+| Base branch (`vX.Y.Z`) yok | ❌ Red |
+| Base'in `-FINAL` tag'i yok | ❌ Red (hard-fail) — release edilmemiş versiyondan hotfix alınamaz |
+| FINAL sonrası base branch'e commit pushlanmış | ❌ Red (hard-fail) — release edilmemiş kod içerir |
+| Base = en güncel kesim, üst seride FINAL yok | ✅ Normal hotfix: `patch+1` (örn. `23.0.1` → `v23.0.2`) |
+| **Base'in kendi serisinde daha yeni kesim var** (RC *veya* FINAL, örn. `v23.0.2-RC` varken base `23.0.1`) | ⚠️ **`hotfix-approval`** onayı; onaylanırsa serinin en yüksek kesimi+1 (→ `v23.0.3`) |
+| **Üst seride release edilmiş (FINAL) versiyon var** (örn. `v23.0.1-FINAL` canlıyken base `22.0.1`) | ⚠️ **`hotfix-approval`** onayı; onaylanırsa base'in kendi serisinde devam (→ `v22.0.2`) |
+| Üst seride *sadece RC* var (örn. `v24.0.0-RC`) | ✅ Eski base sayılmaz — yeni major henüz canlıda değilken önceki serinin hotfix'i normal akıştır |
+| Onay mesajı ifadesi | Referans FINAL'liyse *"vX canlıda"*, sadece RC'liyse *"vX kesilmiş (RC, henüz release edilmedi)"* |
+| Gerçek run | 🔔 Eski base'de **iki onay** (önce `hotfix-approval`, sonra `cut-approval`); güncel base'de sadece `cut-approval` |
+
+### Onay kapıları
+
+| Environment | Ne zaman | Policy |
+|---|---|---|
+| `cut-approval` | Her gerçek cut (release + hotfix), dry-run hariç | Dar reviewer listesi, self-review serbest |
+| `hotfix-approval` | Sadece eski base'den hotfix | Dar reviewer listesi, self-review serbest |
+| Herhangi bir red | Workflow durur, hiçbir repoya yazılmaz | — |
 
 ### Operasyonel güvenlik ağları
 
-- **İki fazlı validate→execute:** kısmi cut riski minimum; hata → sıfır yazma
-- **SHA validasyon anında sabitlenir:** validasyon ile push arasında main'e
-  commit gelse bile branch ve tag doğrulanan SHA'dan oluşur
-- **İdempotent re-run:** kısmi başarısızlıkta (örn. network) aynı input ile
-  güvenle yeniden çalıştırılır; tamamlanan repolar skip edilir
-- **Concurrency guard:** aynı versiyon için paralel çift tetikleme serileşir
-- **Annotated tag:** GitHub Desktop'ın ürettiğiyle aynı tip — mevcut
-  tag'lerle tutarlı (`git describe` vb. tooling sorunsuz)
-- **Audit:** push'lar bot kimliğiyle, job summary'de tetikleyen kişi
+| Durum | Davranış |
+|---|---|
+| Yeni branch/tag zaten var, aynı SHA'da | ⏭️ Skip (idempotent re-run — kısmi başarısızlık telafisi) |
+| Yeni branch/tag zaten var, **farklı** SHA'da | ❌ Red — elle inceleme istenir |
+| Paralel çift tetikleme (aynı versiyon/base) | Concurrency grubu ile serileşir |
+| SHA sabitleme | Validasyon anında okunur; push aynı SHA ile yapılır (arada `main` ilerlese bile) |
+| Tag tipi | Annotated — GitHub Desktop'ın ürettiğiyle aynı (`git describe` vb. tooling sorunsuz) |
+| Audit | Push'lar bot kimliğiyle; job summary'de tetikleyen kişi |
 
 ---
 
@@ -182,16 +208,13 @@ MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cu
    versiyonlar taranıp elle FINAL atılmalı (örn. v6.9.7, v6.9.9) — aksi halde
    bu versiyonlara hotfix gerektiğinde guard yanlış alarm verir.
 5. **Onay environment'ları:** orchestration reposunda Settings →
-   Environments altında iki environment oluşturulur:
-   - **`cut-approval` (genel kapı):** her gerçek cut'ın onayı.
-     - *Required reviewers:* cut alabilecek herkes (geniş liste) — en az
-       1 kişi zorunlu, yoksa approval job'ı beklemeden geçer.
-     - *Prevent self-review:* **kapalı** — cut'ı alan kişi validate
-       özetini inceleyip kendisi onaylayabilir.
-   - **`hotfix-approval` (riskli kapı):** eski base'den hotfix onayı.
-     - *Required reviewers:* release sorumluları (dar liste).
-     - *Prevent self-review:* **açık** (önerilen) — riskli cut ikinci göz
-       gerektirir; tek kişilik ekipte/testte kapalı bırakılabilir.
+   Environments altında iki environment oluşturulur. Her ikisinde de aynı
+   policy: **required reviewers = dar liste** (release sorumluları, en az
+   1 kişi zorunlu — yoksa approval job'ı beklemeden geçer) ve **prevent
+   self-review = kapalı** (cut'ı alan kişi validate özetini inceleyip
+   kendisi onaylayabilir).
+   - **`cut-approval`:** her gerçek cut'ın genel onay kapısı.
+   - **`hotfix-approval`:** eski base'den hotfix'in ek onay kapısı.
 6. Workflow'lardaki `OWNER` / `REPOS` değerleri gerçek repolarla güncellenir.
 
 ---
