@@ -47,6 +47,18 @@ jobs:
           DRY_RUN: "true"
         run: ./scripts/cut.sh
 
+      - name: Show approval request
+        if: ${{ !inputs.dry_run }}
+        run: |
+          {
+            echo "## 🔔 Onay Gerekli — Cut Release v${{ inputs.version }}"
+            echo ""
+            echo "3 repoda \`main\` HEAD'inden \`v${{ inputs.version }}\` branch'i + \`v${{ inputs.version }}-RC\` tag'i oluşturulacak."
+            echo "Planlanan işlemler yukarıdaki tabloda (kaynak SHA + branch/tag durumu)."
+            echo ""
+            echo "Devam etmek için **approve-cut** job'ını onaylayın; reddetmek için reject edin."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Faz 1.5: her gerçek cut için genel onay kapısı (cut-approval
   # environment'ı). Validate'in job summary'sindeki plan incelenip onaylanır.
   # Dry run'da onay istenmez.

@@ -47,7 +47,7 @@ jobs:
           ALLOW_STALE_BASE: "true"
         run: ./scripts/cut.sh
 
-      - name: Show approval request
+      - name: Show approval request (stale base)
         if: steps.validate.outputs.needs_approval == 'true'
         run: |
           {
@@ -56,6 +56,18 @@ jobs:
             echo "> ${{ steps.validate.outputs.approval_message }}"
             echo ""
             echo "Devam etmek için **approve-stale-base** job'ını onaylayın; reddetmek için reject edin."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show approval request (cut)
+        if: ${{ !inputs.dry_run }}
+        run: |
+          {
+            echo "## 🔔 Onay Gerekli — Cut Hotfix v${{ steps.validate.outputs.new_version }}"
+            echo ""
+            echo "3 repoda \`v${{ inputs.base_version }}\` HEAD'inden \`v${{ steps.validate.outputs.new_version }}\` branch'i + \`v${{ steps.validate.outputs.new_version }}-RC\` tag'i oluşturulacak."
+            echo "Planlanan işlemler yukarıdaki tabloda (kaynak SHA + branch/tag durumu)."
+            echo ""
+            echo "Devam etmek için **approve-cut** job'ını onaylayın; reddetmek için reject edin."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Faz 1.5a: sadece eski base tespit edilirse çalışır — hotfix-approval
