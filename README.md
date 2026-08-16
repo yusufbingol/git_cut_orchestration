@@ -22,10 +22,9 @@ Mevcut versioning/hotfix dokümanlarımızdaki kurallar birebir kod'a taşındı
 **Normal cut (sprint sonu, `vX.0.0`):**
 - `main` HEAD'inden `vX.0.0` branch'i oluşturulur — 3 repoda birden
 - Branch'in oluşturulduğu commit'e `vX.0.0-RC` tag'i atılır (annotated)
-- Normal akışta versiyon, **en son release edilmiş (FINAL'li) major'ın
-  +1'idir**; önceki major release edilmemişse cut engellenmez ama onay
-  özetinde uyarı gösterilir. Typo koruması: en fazla en yüksek kesilmiş
-  major'ın +1'i girilebilir.
+- Versiyon, mevcut en yüksek RC major'ının +1'i olmalıdır (RC tag'leri
+  `main` kesim geçmişini temsil eder; FINAL tag'leri release branch'lerinde
+  yaşadığından bu kontrol için uygun değildir)
 
 **Hotfix cut (`vX.Y.Z+1`):**
 - Asla `main`'den alınmaz — release edilmiş `vX.Y.Z` branch'inden alınır
@@ -138,10 +137,9 @@ MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/cu
 
 | Durum | Davranış |
 |---|---|
-| Girilen major = en yüksek **FINAL** major + 1 | ✅ Normal cut (`main` HEAD'inden branch + RC tag) |
-| Önceki major kesilmiş ama release edilmemiş (RC var, FINAL yok) | ✅ Devam eder, ama onay özetinde ⚠️ uyarı gösterilir |
-| Girilen major > en yüksek kesilmiş major + 1 (örn. `99.0.0`) | ❌ Red — typo koruması |
-| Girilen major < en yüksek kesilmiş major (geriye dönük) | ❌ Red — "yeni cut için v(en yüksek+1).0.0 kullanın" |
+| Girilen major = en yüksek **RC** major + 1 | ✅ Normal cut (`main` HEAD'inden branch + RC tag) |
+| Girilen major > en yüksek RC major + 1 (örn. `99.0.0`) | ❌ Red — typo koruması |
+| Girilen major < en yüksek RC major (geriye dönük) | ❌ Red — "yeni cut için v(en yüksek+1).0.0 kullanın" |
 | Aynı versiyon tekrar, `main` değişmemiş | ⏭️ İdempotent skip (zararsız re-run) |
 | Aynı versiyon tekrar, `main` ilerlemiş | ❌ Red — "bir sonraki versiyonu girin" |
 | Hiç RC yoksa (ilk cut) | ✅ Serbest |

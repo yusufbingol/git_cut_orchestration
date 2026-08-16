@@ -98,27 +98,6 @@ ERRORS=()
 read -r -a REPO_LIST <<< "$REPOS"
 SRC_SHA=(); SKIP_BRANCH=(); SKIP_TAG=()
 
-# ---------- Faz 0.5 (release): önceki major'ın release kontrolü ----------
-# Normal akış: yeni major, en yüksek FINAL major'ının +1'idir. Önceki major
-# kesilmiş ama release edilmemişse (RC var, FINAL yok) cut engellenmez ama
-# onaycıya gösterilmek üzere uyarı üretilir (release_warning output'u).
-RELEASE_WARNING=""
-if [[ "$MODE" == "release" ]]; then
-  FINAL_MAJORS=""
-  for repo in "${REPO_LIST[@]}"; do
-    FINAL_MAJORS+=$(list_tags "$repo" \
-      | sed -nE 's/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-FINAL$/\1/p')$'\n'
-  done
-  PREV_MAJOR=$((NEW_MAJOR - 1))
-  if (( PREV_MAJOR >= 1 )) && ! printf '%s' "$FINAL_MAJORS" | grep -qx "$PREV_MAJOR"; then
-    RELEASE_WARNING="⚠️ v$PREV_MAJOR serisi henüz release edilmemiş görünüyor (v$PREV_MAJOR.x.x-FINAL tag'i yok) — normal akışta yeni cut, en son release edilmiş major'ın +1'idir."
-    echo "$RELEASE_WARNING"
-  fi
-  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-    echo "release_warning=$RELEASE_WARNING" >> "$GITHUB_OUTPUT"
-  fi
-fi
-
 # ---------- Faz 0.5 (hotfix): eski base tespiti ----------
 # "Eski base" iki durumda oluşur:
 #   a) Base'in KENDİ serisinde daha yeni bir kesim (RC veya FINAL) var
