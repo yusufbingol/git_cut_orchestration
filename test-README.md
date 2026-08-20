@@ -59,7 +59,7 @@ Actions sekmesi → workflow seç → **Run workflow**:
 |---|---|---|
 | **Cut Release** | `version` (örn. `24.0.0`), `dry_run` | 3 repoda `main`'den `v24.0.0` + `v24.0.0-RC` |
 | **Cut Hotfix** | `base_version` (örn. `23.0.1`), `dry_run` | 3 repoda `v23.0.1`'den `v23.0.2` + `v23.0.2-RC` |
-| **Release (Tag FINAL)** | `version` (opsiyonel, örn. `23.0.1`), `dry_run` | 3 repoda `v23.0.1` branch HEAD'ine `v23.0.1-FINAL` — asla `main`'e değil. Boş input, release bekleyen versiyonu (RC var, FINAL yok) otomatik tespit eder |
+| **Release (Tag FINAL)** | `version` (opsiyonel, örn. `23.0.1`), `dry_run` | 3 repoda `v23.0.1` branch HEAD'ine `v23.0.1-FINAL` — asla `main`'e değil. Boş input, release bekleyen versiyonu (RC var, FINAL yok) otomatik tespit eder. FINAL sonrası **changelog** üretir (RC → FINAL commit'leri + Jira ticket'ları job summary'de; webhook tanımlıysa Slack bildirimi) |
 
 **`dry_run: true`** ile önce prova yapılabilir: tüm validasyonlar çalışır,
 ne yapılacağı raporlanır, hiçbir şey pushlanmaz. Her run sonunda job
@@ -105,9 +105,10 @@ kapalı) — cut'ı alan kişi validate özetini inceleyip kendisi onaylayabilir
 .github/workflows/
 ├── test-cut-release.yml   # validate → approve-cut → cut → scripts/test-cut.sh
 ├── test-cut-hotfix.yml    # validate → (eski base ise approve-stale-base) → approve-cut → cut
-└── test-release.yml       # validate → approve-release → tag-final (vX.Y.Z-FINAL)
+└── test-release.yml       # validate → approve-release → tag-final (vX.Y.Z-FINAL) → changelog
 scripts/
-└── test-cut.sh            # tüm cut mantığı (MODE=release|hotfix|final) — tek kaynak
+├── test-cut.sh            # tüm cut mantığı (MODE=release|hotfix|final) — tek kaynak
+└── test-changelog.sh      # RC → FINAL changelog: commit listesi + Jira ticket ayıklama + Slack
 ```
 
 Mantığın tamamı `scripts/test-cut.sh`'ta: iki workflow arasında kopya kod yok,

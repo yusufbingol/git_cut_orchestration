@@ -117,3 +117,39 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: ./scripts/test-cut.sh
+
+  # Faz 3: changelog — FINAL başarıyla atıldıktan sonra her repo için
+  # RC → FINAL aralığındaki commit'leri ve Jira ticket'larını job summary'ye
+  # yazar; SLACK_WEBHOOK_URL tanımlıysa Slack'e özet gönderir.
+  # Dry run'da çalışmaz (FINAL atılmadı, karşılaştırılacak şey yok).
+  changelog:
+    needs: [validate, tag-final]
+    if: needs.tag-final.result == 'success' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: yusufbingol
+          repositories: |
+            git_deneme
+            git_deneme_2
+            git_deneme_3
+
+      - name: Generate changelog (RC → FINAL)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OWNER: yusufbingol
+          # Gerçek ortamda: assistbox-android assistbox-ios assistbox-mobile-web-content
+          REPOS: git_deneme git_deneme_2 git_deneme_3
+          VERSION: ${{ needs.validate.outputs.version }}
+          # Test ortamında Jira ve Slack bağlantısı yok — boş bırakıldığında
+          # ticket'lar linksiz listelenir, Slack bildirimi atlanır.
+          # Gerçek ortamda: vars.JIRA_BASE_URL + secrets.SLACK_WEBHOOK_URL
+          JIRA_BASE_URL: ""
+          SLACK_WEBHOOK_URL: ""
+        run: ./scripts/test-changelog.sh
