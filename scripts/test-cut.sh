@@ -3,13 +3,14 @@
 # Kullanım (env üzerinden):
 #   MODE=release VERSION=23.0.0        [DRY_RUN=true] ./test-cut.sh
 #   MODE=hotfix  BASE_VERSION=22.0.0   [DRY_RUN=true] ./test-cut.sh
+#   MODE=final   VERSION=23.0.1        [DRY_RUN=true] ./test-cut.sh
 # Gerekli env: OWNER, REPOS (boşlukla ayrılmış), GH_TOKEN
 # GITHUB_STEP_SUMMARY tanımlıysa özet tablo oraya yazılır.
 set -euo pipefail
 
 : "${OWNER:?OWNER gerekli}"
 : "${REPOS:?REPOS gerekli}"
-: "${MODE:?MODE gerekli (release|hotfix)}"
+: "${MODE:?MODE gerekli (release|hotfix|final)}"
 DRY_RUN="${DRY_RUN:-false}"
 # Eski base onayı: serinin daha yüksek FINAL'i varken eski base'den hotfix'e
 # izin verir (workflow'da environment approval sonrası true geçilir).
@@ -67,6 +68,8 @@ fail_with_errors() { # başlık
 
 # ---------- Faz 0: format validasyonu + versiyon hesabı ----------
 
+read -r -a REPO_LIST <<< "$REPOS"
+
 if [[ "$MODE" == "release" ]]; then
   : "${VERSION:?VERSION gerekli (release modu)}"
   # Başında sıfır kabul edilmez (023 → octal/isim kirliliği riski).
@@ -89,13 +92,55 @@ elif [[ "$MODE" == "hotfix" ]]; then
   NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
   SOURCE_REF_DESC="v$BASE_VERSION"
   TITLE="Cut Hotfix v$NEW_VERSION (base: v$BASE_VERSION)"
+elif [[ "$MODE" == "final" ]]; then
+  # VERSION opsiyonel: boşsa release bekleyen versiyon otomatik tespit
+  # edilir — RC tag'i olan ama hiçbir repoda FINAL'i olmayan versiyon.
+  if [[ -z "${VERSION:-}" ]]; then
+    RC_VERSIONS=""; FINAL_VERSIONS=""
+    for repo in "${REPO_LIST[@]}"; do
+      tags=$(list_tags "$repo") || { echo "::error::$OWNER/$repo için tag listesi alınamadı — validasyon sessizce zayıflamasın diye durduruluyor."; exit 1; }
+      RC_VERSIONS+=$(printf '%s' "$tags" | sed -nE 's/^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-RC$/\1/p')$'\n'
+      FINAL_VERSIONS+=$(printf '%s' "$tags" | sed -nE 's/^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-FINAL$/\1/p')$'\n'
+    done
+    # Adaylar: kesilmiş (RC var) ama release edilmemiş (hiçbir repoda FINAL
+    # yok). Kısmen FINAL'lenmiş bir versiyon bilinçli olarak aday sayılmaz —
+    # tamamlamak için versiyon elle girilir (idempotent re-run).
+    CANDIDATES=$(comm -23 \
+      <(printf '%s' "$RC_VERSIONS" | grep -v '^$' | sort -u) \
+      <(printf '%s' "$FINAL_VERSIONS" | grep -v '^$' | sort -u))
+    CANDIDATE_COUNT=$(printf '%s' "$CANDIDATES" | grep -c . || true)
+    if (( CANDIDATE_COUNT == 0 )); then
+      echo "::error::Otomatik tespit release bekleyen versiyon bulamadı (RC'li tüm versiyonların FINAL'i var). Yeniden tag'leme veya yarım kalmış bir run'ı tamamlama amacındaysanız versiyonu elle girin."
+      exit 1
+    elif (( CANDIDATE_COUNT > 1 )); then
+      echo "::error::Otomatik tespit belirsiz — release bekleyen birden fazla versiyon var: $(printf '%s' "$CANDIDATES" | tr '\n' ' '). Versiyonu elle girin."
+      exit 1
+    fi
+    VERSION=$(printf '%s' "$CANDIDATES")
+    echo "Versiyon otomatik tespit edildi: v$VERSION (kesilmiş, henüz release edilmemiş)"
+  fi
+  # Başında sıfır kabul edilmez (023 → octal/isim kirliliği riski).
+  # Format aynı zamanda hedefin daima bir vX.Y.Z release branch'i olmasını
+  # garanti eder — main'e (veya başka bir branch'e) tag atmak tasarım gereği
+  # imkânsızdır.
+  if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "::error::Versiyon 'X.Y.Z' formatında olmalı, başında sıfır olmadan (girilen: $VERSION)"
+    exit 1
+  fi
+  NEW_VERSION="$VERSION"
+  SOURCE_REF_DESC="v$VERSION"
+  TITLE="Release v$NEW_VERSION (FINAL tag)"
+  # Çözümlenen versiyonu workflow'a bildir: onay özeti ve tag job'ı tam
+  # olarak valide edileni kullanır (otomatik tespitte drift olmaz).
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+  fi
 else
-  echo "::error::Geçersiz MODE: $MODE (release|hotfix)"
+  echo "::error::Geçersiz MODE: $MODE (release|hotfix|final)"
   exit 1
 fi
 
 ERRORS=()
-read -r -a REPO_LIST <<< "$REPOS"
 SRC_SHA=(); SKIP_BRANCH=(); SKIP_TAG=()
 
 # ---------- Faz 0.5 (hotfix): eski base tespiti ----------
@@ -160,6 +205,7 @@ fi
 
 NEW_BRANCH="v$NEW_VERSION"
 RC_TAG="v$NEW_VERSION-RC"
+FINAL_TAG="v$NEW_VERSION-FINAL"
 
 # ---------- Faz 1: tüm repolarda validasyon (yazma yok) ----------
 
@@ -189,7 +235,7 @@ for i in "${!REPO_LIST[@]}"; do
         ERRORS+=("$repo: girilen major v$NEW_MAJOR, mevcut en yüksek RC major'ından (v$highest_major) küçük — güncel main'den geriye dönük versiyon kesilemez. Yeni cut için v$((highest_major + 1)).0.0 kullanın (typo koruması)")
       fi
     fi
-  else
+  elif [[ "$MODE" == "hotfix" ]]; then
     # Kaynak: base release branch HEAD
     sha=$(ref_sha "$repo" "heads/v$BASE_VERSION")
     if [[ -z "$sha" ]]; then
@@ -216,6 +262,33 @@ for i in "${!REPO_LIST[@]}"; do
         ERRORS+=("$repo: v$MAJOR.$MINOR.$highest_final_patch-FINAL mevcut — hotfix zinciri v$MAJOR.$MINOR.$highest_final_patch üzerinden devam etmeli (eski base'den cut onay gerektirir)")
       fi
     fi
+  else
+    # ---- final modu: release branch HEAD'ine FINAL tag'i at ----
+    # Kaynak: release branch HEAD'i (cherry-pick'ler sonrası = release edilen kod).
+    sha=$(ref_sha "$repo" "heads/v$VERSION")
+    if [[ -z "$sha" ]]; then
+      ERRORS+=("$repo: release branch'i 'v$VERSION' bulunamadı")
+      continue
+    fi
+    SRC_SHA[i]=$sha
+
+    # Branch otomasyonla kesilmiş olmalı (RC tag'i mevcut).
+    rc_commit=$(commit_sha_of "$repo" "$RC_TAG")
+    if [[ -z "$rc_commit" ]]; then
+      ERRORS+=("$repo: '$RC_TAG' tag'i yok — v$VERSION otomasyonla kesilmiş bir branch gibi görünmüyor. FINAL sadece kesilmiş release branch'lerine atılabilir.")
+    fi
+
+    # FINAL çakışması (idempotency): aynı SHA → skip, farklı → hata.
+    existing_final_commit=$(commit_sha_of "$repo" "$FINAL_TAG")
+    if [[ -n "$existing_final_commit" ]]; then
+      if [[ "$existing_final_commit" == "$sha" ]]; then
+        SKIP_TAG[i]=1
+        echo "$repo: $FINAL_TAG tag'i zaten branch HEAD'inde — skip edilecek"
+      else
+        ERRORS+=("$repo: $FINAL_TAG tag'i zaten var ama farklı commit'te ($existing_final_commit != $sha) — branch FINAL sonrası ilerlemiş ya da yanlış versiyon girilmiş. Elle inceleme gerekli.")
+      fi
+    fi
+    continue
   fi
   SRC_SHA[i]=$sha
 
@@ -252,6 +325,43 @@ fi
 echo "✅ Tüm validasyonlar geçti."
 
 # ---------- Faz 2: execute ----------
+
+if [[ "$MODE" == "final" ]]; then
+  {
+    echo "## $TITLE $( [[ "$DRY_RUN" == "true" ]] && echo '(DRY RUN)' )"
+    echo ""
+    echo "Kaynak: \`$SOURCE_REF_DESC\` HEAD — Tetikleyen: ${GITHUB_ACTOR:-local}"
+    echo ""
+    echo "| Repo | Branch HEAD SHA | Tag $FINAL_TAG |"
+    echo "|---|---|---|"
+  } >> "$SUMMARY"
+
+  for i in "${!REPO_LIST[@]}"; do
+    repo=${REPO_LIST[$i]}
+    sha=${SRC_SHA[$i]}
+    t_status="created"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+      t_status=$([[ -n "${SKIP_TAG[$i]}" ]] && echo "exists (skip)" || echo "would create")
+    else
+      if [[ -n "${SKIP_TAG[$i]}" ]]; then
+        t_status="skipped (exists)"
+      else
+        create_annotated_tag "$repo" "$FINAL_TAG" "$sha" "Final release $NEW_BRANCH"
+      fi
+      echo "$repo: $FINAL_TAG @ $sha"
+    fi
+
+    echo "| $OWNER/$repo | \`${sha:0:10}\` | $t_status |" >> "$SUMMARY"
+  done
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "🔎 Dry run tamamlandı — hiçbir yazma yapılmadı."
+  else
+    echo "🎉 Release tamamlandı: $FINAL_TAG"
+  fi
+  exit 0
+fi
 
 {
   echo "## $TITLE $( [[ "$DRY_RUN" == "true" ]] && echo '(DRY RUN)' )"

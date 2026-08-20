@@ -59,6 +59,7 @@ Actions sekmesi → workflow seç → **Run workflow**:
 |---|---|---|
 | **Cut Release** | `version` (örn. `24.0.0`), `dry_run` | 3 repoda `main`'den `v24.0.0` + `v24.0.0-RC` |
 | **Cut Hotfix** | `base_version` (örn. `23.0.1`), `dry_run` | 3 repoda `v23.0.1`'den `v23.0.2` + `v23.0.2-RC` |
+| **Release (Tag FINAL)** | `version` (opsiyonel, örn. `23.0.1`), `dry_run` | 3 repoda `v23.0.1` branch HEAD'ine `v23.0.1-FINAL` — asla `main`'e değil. Boş input, release bekleyen versiyonu (RC var, FINAL yok) otomatik tespit eder |
 
 **`dry_run: true`** ile önce prova yapılabilir: tüm validasyonlar çalışır,
 ne yapılacağı raporlanır, hiçbir şey pushlanmaz. Her run sonunda job
@@ -103,9 +104,10 @@ kapalı) — cut'ı alan kişi validate özetini inceleyip kendisi onaylayabilir
 ```
 .github/workflows/
 ├── test-cut-release.yml   # validate → approve-cut → cut → scripts/test-cut.sh
-└── test-cut-hotfix.yml    # validate → (eski base ise approve-stale-base) → approve-cut → cut
+├── test-cut-hotfix.yml    # validate → (eski base ise approve-stale-base) → approve-cut → cut
+└── test-release.yml       # validate → approve-release → tag-final (vX.Y.Z-FINAL)
 scripts/
-└── test-cut.sh            # tüm cut mantığı (MODE=release|hotfix) — tek kaynak
+└── test-cut.sh            # tüm cut mantığı (MODE=release|hotfix|final) — tek kaynak
 ```
 
 Mantığın tamamı `scripts/test-cut.sh`'ta: iki workflow arasında kopya kod yok,
@@ -115,6 +117,7 @@ script lokalde de çalıştırılıp test edilebilir (shellcheck temiz):
 export GH_TOKEN=... OWNER=yusufbingol REPOS="git_deneme git_deneme_2 git_deneme_3"
 MODE=release VERSION=24.0.0 DRY_RUN=true ./scripts/test-cut.sh
 MODE=hotfix  BASE_VERSION=23.0.1 DRY_RUN=true ./scripts/test-cut.sh
+MODE=final   VERSION=23.0.1 DRY_RUN=true ./scripts/test-cut.sh   # boş VERSION = otomatik tespit
 # Eski base'den bilinçli cut (workflow'da bunun yerine environment approval var):
 MODE=hotfix  BASE_VERSION=22.0.1 ALLOW_STALE_BASE=true DRY_RUN=true ./scripts/test-cut.sh
 ```
@@ -245,8 +248,10 @@ Geçen senaryolar (17):
      (bugünkü durum) — guard'lar zaten yanlış base'lerin büyük kısmını
      yakalıyor.
    - Ekip kararı bekliyor: self-update karmaşıklığına değer mi?
-2. **`tag-final.yml`:** production release sonrası FINAL tag'leme workflow'u
-   (aynı validate→execute desenli).
+2. **`tag-final.yml`:** ✅ **tamamlandı** — `test-release.yml` workflow'u
+   (validate → approve-release → tag-final): release branch HEAD'ine
+   `vX.Y.Z-FINAL` atar; RC'siz branch'lere ve `main`'e atamaz; boş input'ta
+   release bekleyen versiyonu otomatik tespit eder.
 3. **Build tetikleme:** cut sonrası assistbox-ios / assistbox-android için
    Jenkins/Bitrise `app_release` tetiklemesi.
 4. **Jira entegrasyonu:** "Assistbox Mobile Release vX.Y.Z" task'ının
